@@ -13,7 +13,8 @@ const WEEK_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", 
 /** 一周内所有高峰段（绝对分钟）：周一~周五 9-12、14-18。 */
 function buildPeaks(): Array<[number, number]> {
   const peaks: Array<[number, number]> = [];
-  for (let d = 0; d < 5; d++) {
+  for (let d = 0; d < 10; d++) {
+    if (d % 7 >= 5) continue; // 跳过周末（周六=5、周日=6）
     const base = d * DAY_MIN;
     peaks.push([base + 9 * 60, base + 12 * 60]);
     peaks.push([base + 14 * 60, base + 18 * 60]);
@@ -21,11 +22,14 @@ function buildPeaks(): Array<[number, number]> {
   return peaks;
 }
 
-/** 绝对分钟 →「周X HH:00」。 */
-function peakLabel(absMin: number): string {
+/** 绝对分钟 → 相对日期标注：「今日/明日/周X HH:00」。 */
+function peakLabel(absMin: number, curDayInWeek: number): string {
   const d = Math.floor(absMin / DAY_MIN);
   const m = absMin % DAY_MIN;
   const hh = String(Math.floor(m / 60)).padStart(2, "0");
+  const diff = d - curDayInWeek;
+  if (diff <= 0) return `今日 ${hh}:00`;
+  if (diff === 1) return `明日 ${hh}:00`;
   return `${WEEK_NAMES[d % 7]} ${hh}:00`;
 }
 
@@ -40,8 +44,8 @@ function peakInfo(now: Date): {
   nextPeakLabel: string;
 } {
   const day = now.getDay();
-  const curAbs =
-    ((day + 6) % 7) * DAY_MIN + now.getHours() * 60 + now.getMinutes();
+  const curDayInWeek = (day + 6) % 7; // 0=周一
+  const curAbs = curDayInWeek * DAY_MIN + now.getHours() * 60 + now.getMinutes();
   const peaks = buildPeaks();
 
   // 当前是否落在某个高峰段
@@ -65,7 +69,7 @@ function peakInfo(now: Date): {
 
   // 平价：上一个高峰结束（平价开始）→ 下一个高峰开始（平价结束）
   let prevEnd = -DAY_MIN;
-  let nextStart = 7 * DAY_MIN + DAY_MIN; // 兜底：下下周一
+  let nextStart = 7 * DAY_MIN + 9 * 60; // 兜底：下周一 09:00
   for (const [s, e] of peaks) {
     if (e <= curAbs) prevEnd = Math.max(prevEnd, e);
     if (s > curAbs) {
@@ -77,7 +81,7 @@ function peakInfo(now: Date): {
     isPeak: false,
     remainingMin: nextStart - curAbs,
     progress: (curAbs - prevEnd) / (nextStart - prevEnd),
-    nextPeakLabel: peakLabel(nextStart),
+    nextPeakLabel: peakLabel(nextStart, curDayInWeek),
   };
 }
 
