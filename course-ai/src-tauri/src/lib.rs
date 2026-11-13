@@ -20,7 +20,7 @@ mod usage_log;
 use crate::commands::ai::{
     cmd_generate_ai, cmd_get_chapters, cmd_get_highlights, cmd_get_llm_profiles, cmd_get_mindmap, cmd_get_notes,
     cmd_delete_quiz_set, cmd_get_quiz, cmd_get_quiz_course_rules, cmd_get_summary, cmd_grade_quiz_answer, cmd_set_quiz_course_rules, cmd_detect_ollama, cmd_has_api_key, cmd_list_models, cmd_save_llm_profiles, cmd_save_notes,
-    cmd_set_api_key, cmd_stale_ai_artifacts,
+    cmd_set_api_key, cmd_stale_ai_artifacts, cmd_batch_generate,
 };
 use crate::commands::app::{cmd_check_update, cmd_exit_app};
 use crate::commands::assistant::{cmd_assistant_ask, cmd_cancel_assistant};
@@ -104,7 +104,7 @@ use crate::downloads::{
 use crate::jobs::cmd_list_jobs;
 use crate::pipeline::{
     cmd_cancel_processing, cmd_dismiss_processing_video, cmd_list_processing_videos,
-    cmd_process_video, cmd_recorrect_transcript, ProcessingTasks,
+    cmd_batch_process, cmd_process_video, cmd_recorrect_transcript, ProcessingTasks,
 };
 use crate::usage_log::{cmd_clear_llm_usage, cmd_llm_usage};
 use tauri::Manager;
@@ -317,6 +317,7 @@ pub fn run() {
             cmd_delete_asr_model,
             cmd_list_jobs,
             cmd_process_video,
+            cmd_batch_process,
             cmd_cancel_processing,
             cmd_dismiss_processing_video,
             cmd_list_processing_videos,
@@ -354,6 +355,7 @@ pub fn run() {
             cmd_get_summary,
             cmd_stale_ai_artifacts,
             cmd_generate_ai,
+            cmd_batch_generate,
             cmd_extract_slides,
             cmd_cancel_slides_extract,
             cmd_video_skips,

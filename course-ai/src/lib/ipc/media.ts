@@ -44,6 +44,9 @@ export const pipeline = {
   jobs: (videoId: string): Promise<Job[]> =>
     invoke("cmd_list_jobs", { videoId }),
   active: (): Promise<Video[]> => invoke("cmd_list_processing_videos"),
+  /** 批量处理：对多个视频依次启动完整流水线，返回启动失败的视频列表。 */
+  batchProcess: (videoIds: string[]): Promise<string[]> =>
+    invoke("cmd_batch_process", { videoIds }),
 };
 
 export const transcripts = {
@@ -112,6 +115,12 @@ export const ai = {
     options?: { style?: QuizStyle; append?: boolean },
   ): Promise<void> =>
     invoke("cmd_generate_ai", options ? { videoId, task, options } : { videoId, task }),
+  /** 批量生成：对多个视频、多个产物串行执行，返回每个条目的结果。 */
+  batchGenerate: (
+    videoIds: string[],
+    tasks: string[],
+  ): Promise<Array<{ videoId: string; task: string; status: string; message?: string }>> =>
+    invoke("cmd_batch_generate", { videoIds, tasks }),
   deleteQuizSet: (videoId: string, setId: string): Promise<void> =>
     invoke("cmd_delete_quiz_set", { videoId, setId }),
   gradeQuizAnswer: (videoId: string, question: QuizQuestion, answer: string): Promise<QuizGrade> =>

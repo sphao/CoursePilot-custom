@@ -1647,6 +1647,13 @@ async fn run_ai_followups(
     use crate::llm::profiles::AiTask;
     let mut halted_profiles = HashSet::new();
     let mut halted_dependency_profile = None;
+    // 导入后自动生成哪些 AI 产物，由设置里的 auto_ai_tasks 控制（默认全开）。
+    let auto_tasks = crate::llm::profiles::parse_auto_ai_tasks(
+        crate::commands::settings::get_setting(db, "auto_ai_tasks")
+            .await
+            .unwrap_or_default()
+            .as_deref(),
+    );
     for (stage, task) in [
         ("chapters", AiTask::Chapters),
         ("summary", AiTask::Summary),
@@ -1657,6 +1664,13 @@ async fn run_ai_followups(
         let Some(job) = jobs_list.iter().find(|j| j.stage == stage) else {
             continue;
         };
+        // 设置里关闭了该产物：取消对应 job 并跳过，不再把讲稿喂给模型（省 token）。
+        if !auto_tasks.enabled(task) {
+            let msg = "已在设置中关闭自动生成";
+            let _ = jobs::cancel(db, &job.id, msg).await;
+            emit_stage(app, video_id, &job.id, stage, "canceled", 0.0, Some(msg));
+            continue;
+        }
         // 断点续跑：该步骤已完成则跳过，不重复调用大模型（也避免重复写库）。
         if job.status == "done" {
             emit_stage(app, video_id, &job.id, stage, "done", 1.0, None);
@@ -2102,6 +2116,18 @@ pub async fn cmd_process_video(app: AppHandle, video_id: String) -> AppResult<()
     );
     let _ = start_tx.send(());
     Ok(())
+}
+
+/// 批量处理：对多个视频依次启动完整流水线（并发由内部 PROCESSING_GATE 限制）。
+#[tauri::command]
+pub async fn cmd_batch_process(app: AppHandle, video_ids: Vec<String>) -> AppResult<Vec<String>> {
+    let mut errors = Vec::new();
+    for video_id in video_ids {
+        if let Err(e) = cmd_process_video(app.clone(), video_id).await {
+            errors.push(e.to_string());
+        }
+    }
+    Ok(errors)
 }
 
 /// 仅重新 AI 纠错：视频已有字幕时用。以原始字幕快照生成候选结果，模型成功且

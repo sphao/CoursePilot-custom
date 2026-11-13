@@ -992,6 +992,15 @@
       "low": "低",
       "high": "高"
     },
+    "autoGen": {
+      "title": "自动生成 AI 产物",
+      "hint": "选择导入后自动生成哪些 AI 产物，关掉不需要的以节省 token。",
+      "chapters": "章节",
+      "summary": "总结",
+      "notes": "笔记",
+      "quiz": "测验",
+      "mindmap": "思维导图"
+    },
     "dev": {
       "title": "开发者",
       "footnote": "查看 AI 文稿纠错的请求与回复",
@@ -1834,6 +1843,14 @@
     "selectedCount": "已选 {{count}} 项",
     "selectAll": "全选",
     "done": "完成",
+    "batchActions": "批量生成",
+    "batchProcess": "处理视频",
+    "batchChapters": "生成章节",
+    "batchSummary": "生成总结",
+    "batchNotes": "生成笔记",
+    "batchQuiz": "生成测验",
+    "batchMindmap": "生成思维导图",
+    "runBatch": "执行",
     "deleteSelected": "删除所选",
     "deleteSelectedConfirm": "删除所选的 {{count}} 项？\n共 {{videos}} 个视频会移入回收站，可在 30 天内恢复；选中的文件夹连同子文件夹一并删除。彻底删除后会释放处理产物（桌面端不会删除你导入的原视频文件）。"
   },

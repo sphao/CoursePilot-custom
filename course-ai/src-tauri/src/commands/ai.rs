@@ -664,6 +664,110 @@ pub async fn cmd_generate_ai(
     Ok(())
 }
 
+/// 批量生成的单次调用：与 cmd_generate_ai 相同逻辑，但不走 tauri::command 包装，供批量循环复用。
+async fn generate_one(
+    state: &AppState,
+    video_id: &str,
+    task: &str,
+    options: &GenerateOptions,
+) -> AppResult<()> {
+    if task == "highlights" {
+        let _registration = register_ai_generation(state, video_id, task)?;
+        let (provider, model) = provider_for(state, AiTask::Summary).await?;
+        crate::pipeline::highlights::generate_highlights(&state.db, &provider, &model, video_id).await?;
+        return Ok(());
+    }
+    let ai_task = match task {
+        "chapters" => AiTask::Chapters,
+        "notes" => AiTask::Notes,
+        "summary" => AiTask::Summary,
+        "quiz" => AiTask::Quiz,
+        "mindmap" => AiTask::Mindmap,
+        other => return Err(AppError::Other(format!("unknown task {other}"))),
+    };
+    let _registration = register_ai_generation(state, video_id, task)?;
+    let (provider, model) = provider_for(state, ai_task).await?;
+    let db = state.db.clone();
+    match ai_task {
+        AiTask::Chapters => {
+            ai::generate_chapters(&db, &provider, &model, video_id, None).await?;
+        }
+        AiTask::Notes => {
+            ai::generate_notes(&db, &provider, &model, video_id, None).await?;
+        }
+        AiTask::Summary => {
+            ai::generate_summary(&db, &provider, &model, video_id, None).await?;
+        }
+        AiTask::Quiz => {
+            ai::generate_quiz_with(
+                &db,
+                &provider,
+                &model,
+                video_id,
+                options.style.as_deref(),
+                options.append,
+                None,
+            )
+            .await?;
+        }
+        AiTask::Mindmap => {
+            ai::generate_mindmap(&db, &provider, &model, video_id, None).await?;
+        }
+        AiTask::Rag => {
+            return Err(AppError::Other("RAG 不通过批量生成触发；用 RAG 检索".into()))
+        }
+        AiTask::Correction => {
+            return Err(AppError::Other("字幕纠错不通过批量生成触发".into()))
+        }
+        AiTask::Assistant => {
+            return Err(AppError::Other("全局助手不通过批量生成触发".into()))
+        }
+        AiTask::Digest => {
+            return Err(AppError::Other("分块提要是内部步骤，不单独触发".into()))
+        }
+    }
+    Ok(())
+}
+
+/// 单个批量条目的结果。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchGenerateItem {
+    pub video_id: String,
+    pub task: String,
+    pub status: String, // "ok" | "error"
+    pub message: Option<String>,
+}
+
+/// 批量生成：对多个视频、多个产物串行执行（避免并发抢模型/付费任务）。
+#[tauri::command]
+pub async fn cmd_batch_generate(
+    state: State<'_, AppState>,
+    video_ids: Vec<String>,
+    tasks: Vec<String>,
+) -> AppResult<Vec<BatchGenerateItem>> {
+    let mut results = Vec::new();
+    for video_id in &video_ids {
+        for task in &tasks {
+            match generate_one(&state, video_id, task, &GenerateOptions::default()).await {
+                Ok(()) => results.push(BatchGenerateItem {
+                    video_id: video_id.clone(),
+                    task: task.clone(),
+                    status: "ok".into(),
+                    message: None,
+                }),
+                Err(e) => results.push(BatchGenerateItem {
+                    video_id: video_id.clone(),
+                    task: task.clone(),
+                    status: "error".into(),
+                    message: Some(e.to_string()),
+                }),
+            }
+        }
+    }
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

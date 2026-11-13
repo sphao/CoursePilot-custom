@@ -13,6 +13,7 @@ import { AboutSection } from "./sections/AboutSection";
 import { AppearanceSection } from "./sections/AppearanceSection";
 import { AsrSection } from "./sections/AsrSection";
 import { CoursewareSection } from "./sections/CoursewareSection";
+import { AutoGenerateSection } from "./sections/AutoGenerateSection";
 import { ShortcutsSection } from "./sections/ShortcutsSection";
 import { StorageSection } from "./sections/StorageSection";
 import { StudySection } from "./sections/StudySection";
@@ -244,14 +245,17 @@ export function SettingsPanel({
               {activeCategory === "storage" && <StorageSection form={form} />}
               {activeCategory === "asr" && <AsrSection form={form} />}
               {activeCategory === "llm" && (
-                <Group header={t("settings.llm.profilesGroup")}>
-                  <StackRow>
-                    <LlmSettingsPanel
-                      onDirtyChange={setLlmDirty}
-                      onRegisterActions={registerLlmActions}
-                    />
-                  </StackRow>
-                </Group>
+                <>
+                  <Group header={t("settings.llm.profilesGroup")}>
+                    <StackRow>
+                      <LlmSettingsPanel
+                        onDirtyChange={setLlmDirty}
+                        onRegisterActions={registerLlmActions}
+                      />
+                    </StackRow>
+                  </Group>
+                  <AutoGenerateSection form={form} />
+                </>
               )}
               {activeCategory === "courseware" && <CoursewareSection form={form} />}
               {activeCategory === "about" && <AboutSection />}

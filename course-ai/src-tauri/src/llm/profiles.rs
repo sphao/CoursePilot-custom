@@ -102,6 +102,51 @@ pub struct TaskRouting {
     pub assistant: Option<String>,
 }
 
+/// 导入后自动生成哪些 AI 产物的开关。默认全开；用户在设置里关掉不需要的产物以省 token。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutoAiTasks {
+    pub chapters: bool,
+    pub summary: bool,
+    pub notes: bool,
+    pub quiz: bool,
+    pub mindmap: bool,
+}
+
+impl Default for AutoAiTasks {
+    fn default() -> Self {
+        Self {
+            chapters: true,
+            summary: true,
+            notes: true,
+            quiz: true,
+            mindmap: true,
+        }
+    }
+}
+
+impl AutoAiTasks {
+    /// 某个 AI 任务是否在「自动生成」范围内。RAG/纠错/提要/助手不随自动流水线跑，恒为 true。
+    pub fn enabled(&self, task: AiTask) -> bool {
+        match task {
+            AiTask::Chapters => self.chapters,
+            AiTask::Summary => self.summary,
+            AiTask::Notes => self.notes,
+            AiTask::Quiz => self.quiz,
+            AiTask::Mindmap => self.mindmap,
+            _ => true,
+        }
+    }
+}
+
+/// 解析 auto_ai_tasks 设置；缺失或损坏时回退到全开。
+pub fn parse_auto_ai_tasks(json: Option<&str>) -> AutoAiTasks {
+    match json {
+        Some(s) if !s.trim().is_empty() => serde_json::from_str(s).unwrap_or_default(),
+        _ => AutoAiTasks::default(),
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum AiTask {
     Notes,

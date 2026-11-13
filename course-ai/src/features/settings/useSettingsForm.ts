@@ -51,6 +51,14 @@ export function useSettingsForm() {
   // 本地识别用不用 GPU（只影响桌面上的 Qwen3-ASR）。默认开：没有可用显卡时引擎自己退回 CPU。
   const [asrGpu, setAsrGpu] = useState(true);
   const [slidesAutoExtract, setSlidesAutoExtract] = useState(true);
+  // 导入后自动生成哪些 AI 产物（默认全开；用户关掉不需要的省 token）。
+  const [autoAiTasks, setAutoAiTasks] = useState({
+    chapters: true,
+    summary: true,
+    notes: true,
+    quiz: true,
+    mindmap: true,
+  });
   const [volcengineAppId, setVolcengineAppId] = useState("");
   const [volcengineToken, setVolcengineToken] = useState("");
   const [volcengineSaved, setVolcengineSaved] = useState("");
@@ -132,6 +140,21 @@ export function useSettingsForm() {
       load("subtitle_autocorrect", (value) => setSubtitleAutocorrect(value !== "false")),
       load("asr_gpu", (value) => setAsrGpu(value !== "false")),
       load("slides_auto_extract", (value) => setSlidesAutoExtract(value !== "off")),
+      load("auto_ai_tasks", (value) => {
+        if (!value) return;
+        try {
+          const parsed = JSON.parse(value);
+          setAutoAiTasks({
+            chapters: parsed.chapters !== false,
+            summary: parsed.summary !== false,
+            notes: parsed.notes !== false,
+            quiz: parsed.quiz !== false,
+            mindmap: parsed.mindmap !== false,
+          });
+        } catch {
+          // 损坏的 JSON 保持默认全开
+        }
+      }),
       load("volcengine_asr_app_id", (value) => setVolcengineAppId(value ?? "")),
       load("volcengine_asr_hotwords", (value) => setVolcengineHotwords(value ?? "")),
       load("volcengine_asr_context", (value) => setVolcengineContext(value ?? "")),
@@ -219,6 +242,15 @@ export function useSettingsForm() {
   async function changeSlidesAutoExtract(value: boolean) {
     setSlidesAutoExtract(value);
     await saveSetting("slides_auto_extract", value ? "on" : "off");
+  }
+
+  async function changeAutoAiTask(
+    task: keyof typeof autoAiTasks,
+    value: boolean,
+  ) {
+    const next = { ...autoAiTasks, [task]: value };
+    setAutoAiTasks(next);
+    await saveSetting("auto_ai_tasks", JSON.stringify(next));
   }
 
   async function saveVolcengineKey() {
@@ -434,6 +466,8 @@ export function useSettingsForm() {
     changeSubtitleAutocorrect,
     changeAsrGpu,
     changeSlidesAutoExtract,
+    autoAiTasks,
+    changeAutoAiTask,
     saveVolcengineKey,
     saveVolcengineContext,
     changeAliyunModel,

@@ -993,6 +993,15 @@
       "low": "Low",
       "high": "High"
     },
+    "autoGen": {
+      "title": "Auto-generate AI artifacts",
+      "hint": "Choose which AI artifacts are generated automatically after import. Turn off what you don't need to save tokens.",
+      "chapters": "Chapters",
+      "summary": "Summary",
+      "notes": "Notes",
+      "quiz": "Quiz",
+      "mindmap": "Mind map"
+    },
     "dev": {
       "title": "Developer",
       "footnote": "View AI transcript correction requests and responses",
@@ -1848,6 +1857,14 @@
     "selectedCount": "{{count}} selected",
     "selectAll": "Select all",
     "done": "Done",
+    "batchActions": "Bulk generate",
+    "batchProcess": "Process videos",
+    "batchChapters": "Generate chapters",
+    "batchSummary": "Generate summary",
+    "batchNotes": "Generate notes",
+    "batchQuiz": "Generate quiz",
+    "batchMindmap": "Generate mind map",
+    "runBatch": "Run",
     "deleteSelected": "Delete selected",
     "deleteSelectedConfirm": "Delete the {{count}} selected items?\n{{videos}} videos will move to the recycle bin and can be restored within 30 days; selected folders are deleted together with their subfolders. Derived files are freed after permanent deletion (on desktop, the original video files you imported are kept)."
   },

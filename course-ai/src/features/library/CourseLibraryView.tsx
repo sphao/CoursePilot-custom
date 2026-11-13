@@ -457,6 +457,11 @@ export function CourseLibraryView({
   const [selecting, setSelecting] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
   const selectionAnchor = useRef<string | null>(null);
+  // 批量操作下拉：勾选要执行的动作（处理 / 生成各产物）。
+  const [batchMenuOpen, setBatchMenuOpen] = useState(false);
+  const [batchActions, setBatchActions] = useState<Set<string>>(
+    () => new Set(["process", "chapters", "summary", "notes"]),
+  );
   const exitSelection = useCallback(() => {
     setSelecting(false);
     setSelectedKeys(new Set());
@@ -566,6 +571,51 @@ export function CourseLibraryView({
   function openFolder(id: string | null) {
     setVideoQuery("");
     onFolderChange(id);
+  }
+
+  // ---------- 批量操作（处理 / 生成产物） ----------
+  const batchActionOptions = [
+    { key: "process", labelKey: "library.batchProcess" },
+    { key: "chapters", labelKey: "library.batchChapters" },
+    { key: "summary", labelKey: "library.batchSummary" },
+    { key: "notes", labelKey: "library.batchNotes" },
+    { key: "quiz", labelKey: "library.batchQuiz" },
+    { key: "mindmap", labelKey: "library.batchMindmap" },
+  ] as const;
+
+  function toggleBatchAction(key: string) {
+    setBatchActions((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  async function runBatchActions() {
+    const videoIds = selectedItems
+      .filter((item) => item.kind === "video")
+      .map((item) => item.id);
+    if (videoIds.length === 0) return;
+    setBatchMenuOpen(false);
+    try {
+      if (batchActions.has("process")) {
+        await ipc.pipeline.batchProcess(videoIds);
+        // 刷新处理队列 + 视频列表（processed_status 会变成 processing，队列要能看到）
+        void queryClient.invalidateQueries({ queryKey: qk.processingVideos() });
+        if (selectedCourseId) {
+          void queryClient.invalidateQueries({ queryKey: qk.videos.list(selectedCourseId) });
+        }
+      }
+      const genTasks = ["chapters", "summary", "notes", "quiz", "mindmap"].filter((task) =>
+        batchActions.has(task),
+      );
+      if (genTasks.length > 0) {
+        await ipc.ai.batchGenerate(videoIds, genTasks);
+      }
+    } finally {
+      exitSelection();
+    }
   }
 
   function changeView(next: LibraryView) {
@@ -1680,6 +1730,46 @@ export function CourseLibraryView({
             >
               {t("library.selectAll")}
             </Button>
+            <div className="relative">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={selectedItems.length === 0}
+                onClick={() => setBatchMenuOpen((v) => !v)}
+              >
+                <Wand2 className="h-4 w-4" />
+                <span className="max-sm:sr-only">{t("library.batchActions")}</span>
+              </Button>
+              {batchMenuOpen && (
+                <Menu
+                  aria-label={t("library.batchActions")}
+                  className="absolute bottom-full right-0 z-20 mb-1 w-56"
+                  onClose={() => setBatchMenuOpen(false)}
+                >
+                  {batchActionOptions.map((option) => (
+                    <MenuItem
+                      key={option.key}
+                      className="ca-touch-44 flex items-center gap-2"
+                      onClick={() => toggleBatchAction(option.key)}
+                    >
+                      <span className="w-4 flex-none text-center text-[var(--text-3)]">
+                        {batchActions.has(option.key) ? (
+                          <Check aria-hidden="true" className="mx-auto h-4 w-4" />
+                        ) : null}
+                      </span>
+                      {t(option.labelKey)}
+                    </MenuItem>
+                  ))}
+                  <MenuItem
+                    className="ca-touch-44 flex items-center justify-center font-medium"
+                    disabled={batchActions.size === 0}
+                    onClick={() => void runBatchActions()}
+                  >
+                    {t("library.runBatch")}
+                  </MenuItem>
+                </Menu>
+              )}
+            </div>
             <Button
               variant="ghost"
               size="sm"
