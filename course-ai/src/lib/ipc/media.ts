@@ -121,6 +121,14 @@ export const ai = {
     tasks: string[],
   ): Promise<Array<{ videoId: string; task: string; status: string; message?: string }>> =>
     invoke("cmd_batch_generate", { videoIds, tasks }),
+  /** 查询 DeepSeek 账户余额。 */
+  deepseekBalance: (): Promise<{
+    isAvailable: boolean;
+    currency: string;
+    totalBalance: string;
+    grantedBalance: string;
+    toppedUpBalance: string;
+  }> => invoke("cmd_deepseek_balance"),
   deleteQuizSet: (videoId: string, setId: string): Promise<void> =>
     invoke("cmd_delete_quiz_set", { videoId, setId }),
   gradeQuizAnswer: (videoId: string, question: QuizQuestion, answer: string): Promise<QuizGrade> =>

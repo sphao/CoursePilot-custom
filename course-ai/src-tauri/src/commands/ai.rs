@@ -768,6 +768,56 @@ pub async fn cmd_batch_generate(
     Ok(results)
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeepSeekBalanceInfo {
+    pub is_available: bool,
+    pub currency: String,
+    pub total_balance: String,
+    pub granted_balance: String,
+    pub topped_up_balance: String,
+}
+
+/// 查询 DeepSeek 账户余额（用第一个 Profile 的 API Key 调 /user/balance）。
+#[tauri::command]
+pub async fn cmd_deepseek_balance(state: State<'_, AppState>) -> AppResult<DeepSeekBalanceInfo> {
+    let profiles = parse_profiles(get_setting(&state.db, "llm_profiles").await?.as_deref())?;
+    let Some(profile) = profiles.first().cloned() else {
+        return Err(AppError::Config("尚未配置大模型".into()));
+    };
+    let Some(key) = crate::llm::api_key_for(&state.db, &profile).await? else {
+        return Err(AppError::Config("尚未配置 API Key".into()));
+    };
+    // base_url 去掉 /v1 后缀再拼 /user/balance
+    let base = profile.base_url.trim_end_matches('/');
+    let base = base.strip_suffix("/v1").unwrap_or(base);
+    let url = format!("{base}/user/balance");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_default();
+    let resp: serde_json::Value = client
+        .get(&url)
+        .bearer_auth(&key)
+        .send()
+        .await
+        .map_err(|e| AppError::Other(format!("查询余额失败: {e}")))?
+        .error_for_status()
+        .map_err(|e| AppError::Other(format!("查询余额失败: {e}")))?
+        .json()
+        .await
+        .map_err(|e| AppError::Other(format!("解析余额失败: {e}")))?;
+    let is_available = resp["is_available"].as_bool().unwrap_or(false);
+    let info = &resp["balance_infos"][0];
+    Ok(DeepSeekBalanceInfo {
+        is_available,
+        currency: info["currency"].as_str().unwrap_or("CNY").to_string(),
+        total_balance: info["total_balance"].as_str().unwrap_or("0").to_string(),
+        granted_balance: info["granted_balance"].as_str().unwrap_or("0").to_string(),
+        topped_up_balance: info["topped_up_balance"].as_str().unwrap_or("0").to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

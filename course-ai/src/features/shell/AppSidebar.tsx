@@ -25,6 +25,7 @@ import type { Video } from "@/lib/types";
 import { useAssistantUi } from "@/stores/assistant";
 import { toggleThemeFrom, type ShellNav } from "./shellNav";
 import { BackgroundTasksButton } from "./BackgroundTasks";
+import { DeepSeekStatusPanel } from "./DeepSeekStatusPanel";
 
 /** 侧栏里的一行入口：图标 + 文字，当前页用中性的底色与字重标出（不铺强调色）。 */
 function SideNavItem({
@@ -226,6 +227,8 @@ export function AppSidebar({
           }
         />
       </div>
+
+      <DeepSeekStatusPanel />
 
       <div className="ca-side-foot">
         <SideNavItem
