@@ -1111,7 +1111,7 @@ async fn run_all(
     Ok(())
 }
 
-/// 自动提取课件是否开启。默认开；设置里显式关掉的课程/用户才跳过。
+/// 自动提取课件是否开启。默认关（省 token）；设置里显式打开才提取。
 async fn slides_auto_enabled(db: &crate::db::Db) -> bool {
     let value: Option<String> =
         sqlx::query_scalar("SELECT value FROM settings WHERE key='slides_auto_extract'")
@@ -1119,7 +1119,7 @@ async fn slides_auto_enabled(db: &crate::db::Db) -> bool {
             .await
             .ok()
             .flatten();
-    !matches!(value.as_deref().map(str::trim), Some("off") | Some("false"))
+    matches!(value.as_deref().map(str::trim), Some("on") | Some("true"))
 }
 
 /// 导入后自动跑「提取课件 → 识别课件文字」。与抽音频/语音识别并行（一个啃画面、一个啃音轨），
@@ -2383,15 +2383,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn slides_auto_extract_is_on_unless_explicitly_turned_off() {
+    async fn slides_auto_extract_is_off_unless_explicitly_turned_on() {
         let dir = tempdir().unwrap();
         let db = crate::db::Db::connect_and_migrate(&dir.path().join("test.db"))
             .await
             .unwrap();
-        // 没设置过：默认开，导入后自动提取课件。
-        assert!(slides_auto_enabled(&db).await);
+        // 没设置过：默认关，导入后不自动提取课件（省 token）。
+        assert!(!slides_auto_enabled(&db).await);
 
-        for (value, expected) in [("off", false), ("on", true), ("false", false)] {
+        for (value, expected) in [("on", true), ("off", false), ("true", true)] {
             sqlx::query(
                 "INSERT OR REPLACE INTO settings(key,value) VALUES ('slides_auto_extract',?)",
             )

@@ -48,8 +48,29 @@ pub fn new_slide_lines(previous: &[String], current: &str) -> Vec<String> {
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .filter(|line| !previous.iter().any(|seen| seen == line))
+        .filter(|line| is_meaningful_slide_line(line))
         .map(str::to_string)
         .collect()
+}
+
+/// 过滤 OCR 噪音行：纯符号、超短碎片、常见水印/页眉词。只保留有信息量的板书，
+/// 显著缩小喂给模型的输入 token。
+fn is_meaningful_slide_line(line: &str) -> bool {
+    // 至少两个字符，且含汉字/字母/数字（排除纯标点、符号、乱码行）。
+    if line.chars().count() < 2 {
+        return false;
+    }
+    if !line.chars().any(|c| c.is_alphanumeric()) {
+        return false;
+    }
+    // 常见水印/页眉页脚词：整行以此开头才算噪音，避免误杀正文。
+    const NOISE_PREFIX: [&str; 10] = [
+        "关注", "点赞", "投币", "收藏", "转发", "扫码", "公众号", "课程咨询", "三连", "加群",
+    ];
+    if NOISE_PREFIX.iter().any(|n| line.starts_with(n)) {
+        return false;
+    }
+    true
 }
 
 /// 从 transcripts 表拼出 "[mm:ss] text" 多行文本。

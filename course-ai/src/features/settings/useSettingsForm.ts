@@ -50,7 +50,7 @@ export function useSettingsForm() {
   const [subtitleAutocorrect, setSubtitleAutocorrect] = useState(true);
   // 本地识别用不用 GPU（只影响桌面上的 Qwen3-ASR）。默认开：没有可用显卡时引擎自己退回 CPU。
   const [asrGpu, setAsrGpu] = useState(true);
-  const [slidesAutoExtract, setSlidesAutoExtract] = useState(true);
+  const [slidesAutoExtract, setSlidesAutoExtract] = useState(false);
   // 导入后自动生成哪些 AI 产物（默认全开；用户关掉不需要的省 token）。
   const [autoAiTasks, setAutoAiTasks] = useState({
     chapters: true,
@@ -139,7 +139,7 @@ export function useSettingsForm() {
       load("asr_correction_concurrency", (value) => setCorrectionConcurrency(value ?? "8")),
       load("subtitle_autocorrect", (value) => setSubtitleAutocorrect(value !== "false")),
       load("asr_gpu", (value) => setAsrGpu(value !== "false")),
-      load("slides_auto_extract", (value) => setSlidesAutoExtract(value !== "off")),
+      load("slides_auto_extract", (value) => setSlidesAutoExtract(value === "on")),
       load("auto_ai_tasks", (value) => {
         if (!value) return;
         try {
