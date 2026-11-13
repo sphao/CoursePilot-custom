@@ -7,61 +7,94 @@ import { qk } from "@/lib/queryKeys";
 const PRICE_IN_PER_M = 0.3;
 const PRICE_OUT_PER_M = 1.2;
 
-/** 峰谷时段：工作日 9-12、14-18 为高峰，其余（含周末）为平价。返回当前时段信息。 */
-function peakInfo(now: Date): { isPeak: boolean; remainingMin: number; progress: number } {
-  const day = now.getDay();
-  const isWeekend = day === 0 || day === 6;
-  const minutes = now.getHours() * 60 + now.getMinutes();
+const DAY_MIN = 24 * 60;
+const WEEK_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 
-  let isPeak = false;
-  let startMin = 0;
-  let endMin = 24 * 60;
-
-  if (isWeekend) {
-    // 周末全天平价
-    isPeak = false;
-    startMin = 0;
-    endMin = 24 * 60;
-  } else if (minutes >= 9 * 60 && minutes < 12 * 60) {
-    isPeak = true;
-    startMin = 9 * 60;
-    endMin = 12 * 60;
-  } else if (minutes >= 14 * 60 && minutes < 18 * 60) {
-    isPeak = true;
-    startMin = 14 * 60;
-    endMin = 18 * 60;
-  } else if (minutes < 9 * 60) {
-    isPeak = false;
-    startMin = 0;
-    endMin = 9 * 60;
-  } else if (minutes < 14 * 60) {
-    isPeak = false;
-    startMin = 12 * 60;
-    endMin = 14 * 60;
-  } else {
-    isPeak = false;
-    startMin = 18 * 60;
-    endMin = 24 * 60;
+/** 一周内所有高峰段（绝对分钟）：周一~周五 9-12、14-18。 */
+function buildPeaks(): Array<[number, number]> {
+  const peaks: Array<[number, number]> = [];
+  for (let d = 0; d < 5; d++) {
+    const base = d * DAY_MIN;
+    peaks.push([base + 9 * 60, base + 12 * 60]);
+    peaks.push([base + 14 * 60, base + 18 * 60]);
   }
-
-  const remainingMin = Math.max(0, endMin - minutes);
-  const totalMin = Math.max(1, endMin - startMin);
-  const progress = Math.min(1, Math.max(0, (minutes - startMin) / totalMin));
-  return { isPeak, remainingMin, progress };
+  return peaks;
 }
 
-/** 分钟 →「X小时X分」。 */
-function formatMinutes(min: number): string {
+/** 绝对分钟 →「周X HH:00」。 */
+function peakLabel(absMin: number): string {
+  const d = Math.floor(absMin / DAY_MIN);
+  const m = absMin % DAY_MIN;
+  const hh = String(Math.floor(m / 60)).padStart(2, "0");
+  return `${WEEK_NAMES[d % 7]} ${hh}:00`;
+}
+
+/**
+ * 峰谷时段：工作日 9-12、14-18 为高峰，其余（含周末全天）为平价。
+ * 平价时段的剩余时间跨天计算到下一个高峰开始（如周五晚 → 周一 09:00）。
+ */
+function peakInfo(now: Date): {
+  isPeak: boolean;
+  remainingMin: number;
+  progress: number;
+  nextPeakLabel: string;
+} {
+  const day = now.getDay();
+  const curAbs =
+    ((day + 6) % 7) * DAY_MIN + now.getHours() * 60 + now.getMinutes();
+  const peaks = buildPeaks();
+
+  // 当前是否落在某个高峰段
+  let currentPeak: [number, number] | null = null;
+  for (const seg of peaks) {
+    if (curAbs >= seg[0] && curAbs < seg[1]) {
+      currentPeak = seg;
+      break;
+    }
+  }
+
+  if (currentPeak) {
+    const [s, e] = currentPeak;
+    return {
+      isPeak: true,
+      remainingMin: e - curAbs,
+      progress: (curAbs - s) / (e - s),
+      nextPeakLabel: "",
+    };
+  }
+
+  // 平价：上一个高峰结束（平价开始）→ 下一个高峰开始（平价结束）
+  let prevEnd = -DAY_MIN;
+  let nextStart = 7 * DAY_MIN + DAY_MIN; // 兜底：下下周一
+  for (const [s, e] of peaks) {
+    if (e <= curAbs) prevEnd = Math.max(prevEnd, e);
+    if (s > curAbs) {
+      nextStart = s;
+      break;
+    }
+  }
+  return {
+    isPeak: false,
+    remainingMin: nextStart - curAbs,
+    progress: (curAbs - prevEnd) / (nextStart - prevEnd),
+    nextPeakLabel: peakLabel(nextStart),
+  };
+}
+
+/** 分钟 →「X天X小时X分」（跨天时带天）。 */
+function formatDuration(min: number): string {
   const m = Math.round(min);
-  const h = Math.floor(m / 60);
+  const d = Math.floor(m / DAY_MIN);
+  const h = Math.floor((m % DAY_MIN) / 60);
   const mm = m % 60;
+  if (d > 0) return `${d}天${h}小时${mm}分`;
   if (h > 0) return `${h}小时${mm}分`;
   return `${mm}分`;
 }
 
 /**
  * 侧边栏底部 DeepSeek 状态面板，复刻 DSH：
- * 今日消费金额、余额、当前峰谷时段剩余时间 + 进度条。
+ * 今日消费金额、余额、当前峰谷时段剩余时间 + 进度条（下方标注转峰时）。
  */
 export function DeepSeekStatusPanel() {
   const { t } = useTranslation();
@@ -79,7 +112,6 @@ export function DeepSeekStatusPanel() {
   const now = new Date();
   const peak = peakInfo(now);
 
-  // 今日消费金额（token × 定价）
   const todayCost = (usage.data ?? []).reduce((sum, u) => {
     return (
       sum +
@@ -120,14 +152,21 @@ export function DeepSeekStatusPanel() {
         </span>
         <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--surface-card-hover)]">
           <div
-            className={`h-full rounded-full ${peak.isPeak ? "bg-red-400" : "bg-sky-400"}`}
+            className="h-full rounded-full bg-sky-400"
             style={{ width: `${peak.progress * 100}%` }}
           />
         </div>
         <span className="shrink-0 tabular-nums text-[10px] text-[var(--text-faint)]">
-          {t("nav.remaining")} {formatMinutes(peak.remainingMin)}
+          {t("nav.remaining")} {formatDuration(peak.remainingMin)}
         </span>
       </div>
+
+      {/* 转峰时标注（平价时显示下一个高峰开始） */}
+      {peak.nextPeakLabel && (
+        <div className="-mt-1 text-right text-[10px] leading-none text-[var(--text-faint)]">
+          {peak.nextPeakLabel} {t("nav.toPeak")}
+        </div>
+      )}
     </div>
   );
 }

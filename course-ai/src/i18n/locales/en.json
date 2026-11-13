@@ -14,7 +14,7 @@
     "peakHours": "Peak",
     "offPeakHours": "Off-peak",
     "remaining": "Remaining",
-    "peakRange": "9-12 · 14-18",
+    "toPeak": "→ peak",
     "expandSidebar": "Expand sidebar",
     "collapseSidebar": "Collapse sidebar",
     "backToLibrary": "Back to courses",
