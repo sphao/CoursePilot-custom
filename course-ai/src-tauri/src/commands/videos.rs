@@ -1119,12 +1119,22 @@ fn parse_chapter_number(s: &str) -> Option<u32> {
 }
 
 /// 清理主题：去掉开头/结尾的分隔符与空白。
-fn clean_topic(s: &str) -> String {
-    s.trim()
+fn clean_topic(s: &str, lecturer: Option<&str>) -> String {
+    let mut t = s
+        .trim()
         .trim_start_matches(['—', '–', '-', ':', '：', ' ', '\t', '、', '·', '.', '。'])
         .trim_end_matches(['—', '–', '-', ' ', '\t', '。'])
         .trim()
-        .to_string()
+        .to_string();
+    // 去掉主题里重复的作者名
+    if let Some(l) = lecturer {
+        if !l.is_empty() {
+            t = t.replace(l, "");
+        }
+    }
+    // 精简分割线：长横线（em/en dash）→ 短横线（先双后单，避免「——」变成「--」）
+    t = t.replace("——", "-").replace("—", "-").replace("–", "-");
+    t.trim().trim_matches('-').trim().to_string()
 }
 
 const CHAPTER_UNITS: [&str; 7] = ["节课", "节", "讲", "章", "课", "部分", "单元"];
@@ -1140,41 +1150,56 @@ fn strip_extension(title: &str) -> String {
     title.to_string()
 }
 
-/// 找 "pNN" 的位置（B 站分 P 序号，前面须是空白或开头）。
-fn find_p_number(s: &str) -> Option<usize> {
+/// 找 "pNN" 的位置（B 站分 P 序号，前面须是空白/短横线/开头）。
+/// 返回 (位置, 数字, pNN 结束位置)。
+fn find_p_number(s: &str) -> Option<(usize, u32, usize)> {
     let bytes = s.as_bytes();
     for i in 0..s.len().saturating_sub(1) {
-        if (bytes[i] == b'p' || bytes[i] == b'P')
-            && bytes[i + 1].is_ascii_digit()
-            && (i == 0 || bytes[i - 1].is_ascii_whitespace())
-        {
-            return Some(i);
+        if (bytes[i] == b'p' || bytes[i] == b'P') && bytes[i + 1].is_ascii_digit() {
+            let prev_ok = i == 0
+                || bytes[i - 1].is_ascii_whitespace()
+                || bytes[i - 1] == b'-';
+            if !prev_ok {
+                continue;
+            }
+            let mut j = i + 1;
+            while j < s.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if let Ok(n) = s[i + 1..j].parse::<u32>() {
+                return Some((i, n, j));
+            }
         }
     }
     None
 }
 
-/// 提取讲师名：形如「——讲师名 pNN」（讲师名在「——」和 pNN 之间）。
-/// 返回 (讲师名, 去掉讲师名后的剩余部分)；无讲师名时返回 (None, 原标题)。
-fn extract_lecturer(title: &str) -> (Option<String>, String) {
+/// 从 pNN 之前的内容提取讲师名（去掉课程前缀「——」、末尾「-」、空格取最后一段）。
+fn extract_lecturer(before_p: &str) -> Option<String> {
+    let mut b = before_p.trim();
+    if b.is_empty() {
+        return None;
+    }
     for sep in ["——", "—"] {
-        if let Some(pos) = title.find(sep) {
-            let after = &title[pos + sep.len()..].trim_start();
-            if let Some(p_pos) = find_p_number(after) {
-                let lecturer = after[..p_pos].trim().to_string();
-                if !lecturer.is_empty() {
-                    return (Some(lecturer), after[p_pos..].trim_start().to_string());
-                }
-            }
+        if let Some(pos) = b.rfind(sep) {
+            b = &b[pos + sep.len()..];
         }
     }
-    (None, title.to_string())
+    b = b.trim().trim_matches('-').trim();
+    if let Some(last) = b.split_whitespace().last() {
+        b = last;
+    }
+    if b.is_empty() {
+        None
+    } else {
+        Some(b.to_string())
+    }
 }
 
 /// 从（去掉扩展名/讲师名/分 P 后的）标题里提取章节号、章节原文、主题。
-fn extract_chapter(cleaned: &str) -> (Option<u32>, Option<String>, String) {
+fn extract_chapter(cleaned: &str, lecturer: Option<&str>) -> (Option<u32>, Option<String>, String) {
     let Some(di) = cleaned.find('第') else {
-        return (None, None, clean_topic(cleaned));
+        return (None, None, clean_topic(cleaned, lecturer));
     };
     let after_di = &cleaned[di + '第'.len_utf8()..];
     let num_len: usize = after_di
@@ -1183,7 +1208,7 @@ fn extract_chapter(cleaned: &str) -> (Option<u32>, Option<String>, String) {
         .map(|c| c.len_utf8())
         .sum();
     if num_len == 0 {
-        return (None, None, clean_topic(cleaned));
+        return (None, None, clean_topic(cleaned, lecturer));
     }
     let num_str = &after_di[..num_len];
     let after_num = &after_di[num_len..];
@@ -1192,26 +1217,14 @@ fn extract_chapter(cleaned: &str) -> (Option<u32>, Option<String>, String) {
             let num = parse_chapter_number(num_str);
             // 保留章节原文（如「第十节」），排序用阿拉伯数字 num。
             let chapter_text = format!("第{num_str}{unit}");
-            let topic = clean_topic(&after_num[unit.len()..]);
+            let topic = clean_topic(&after_num[unit.len()..], lecturer);
             if topic.is_empty() {
-                return (num, Some(chapter_text), clean_topic(cleaned));
+                return (num, Some(chapter_text), clean_topic(cleaned, lecturer));
             }
             return (num, Some(chapter_text), topic);
         }
     }
-    (None, None, clean_topic(cleaned))
-}
-
-/// 提取 pNN 序号：返回 (序号, 去掉 pNN 后的内容)。
-fn extract_p_number(s: &str) -> (Option<u32>, String) {
-    let Some(pos) = find_p_number(s) else {
-        return (None, s.to_string());
-    };
-    let after = &s[pos..];
-    let digits: String = after[1..].chars().take_while(|c| c.is_ascii_digit()).collect();
-    let num = digits.parse::<u32>().ok();
-    let rest = &after[1 + digits.len()..];
-    (num, rest.trim_start().to_string())
+    (None, None, clean_topic(cleaned, lecturer))
 }
 
 /// 从标题解析出的结构化信息。
@@ -1226,26 +1239,32 @@ struct ParsedTitle {
 /// 从标题解析出（讲师名, p 序号, 章节序号, 章节原文, 主题）。
 fn parse_lecture(title: &str) -> ParsedTitle {
     let title = strip_extension(title);
-    let (lecturer, rest) = extract_lecturer(&title);
-    let (p_number, rest) = extract_p_number(&rest);
-    let (chapter_num, chapter_text, topic) = extract_chapter(&rest);
+    let Some((p_pos, p_number, p_end)) = find_p_number(&title) else {
+        let (num, text, topic) = extract_chapter(&title, None);
+        return ParsedTitle {
+            lecturer: None,
+            p_number: None,
+            chapter_num: num,
+            chapter_text: text,
+            topic,
+        };
+    };
+    let before = &title[..p_pos];
+    let lecturer = extract_lecturer(before);
+    let after_p = title[p_end..].trim_start();
+    let (chapter_num, chapter_text, topic) = extract_chapter(after_p, lecturer.as_deref());
     ParsedTitle {
         lecturer,
-        p_number,
+        p_number: Some(p_number),
         chapter_num,
         chapter_text,
         topic,
     }
 }
 
-/// 按「作者-p序号-章节-标题」模板生成新标题（各部分缺省时省略）。
+/// 按「p序号-章节-标题-作者」模板生成新标题（各部分缺省时省略）。
 fn build_lecture_title(p: &ParsedTitle, number: Option<u32>) -> String {
     let mut parts: Vec<String> = Vec::new();
-    if let Some(l) = &p.lecturer {
-        if !l.is_empty() {
-            parts.push(l.clone());
-        }
-    }
     if let Some(n) = number {
         parts.push(format!("p{n:02}"));
     }
@@ -1256,6 +1275,11 @@ fn build_lecture_title(p: &ParsedTitle, number: Option<u32>) -> String {
     }
     if !p.topic.is_empty() {
         parts.push(p.topic.clone());
+    }
+    if let Some(l) = &p.lecturer {
+        if !l.is_empty() {
+            parts.push(l.clone());
+        }
     }
     parts.join("-")
 }
