@@ -1,5 +1,6 @@
 fn main() {
     println!("cargo:rerun-if-changed=migrations");
+    println!("cargo:rerun-if-changed=binaries");
     // sherpa-onnx 的动态库在安装包里放在 Contents/Frameworks（tauri.macos.conf.json 的 frameworks）。
     // 它自己的构建脚本只加了 @loader_path（开发时库就在可执行文件旁边），装好的 .app 里还得找这里。
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
@@ -13,6 +14,8 @@ fn main() {
     link_ios_plugin();
     #[cfg(target_os = "macos")]
     build_macos_cloud_sync();
+    #[cfg(target_os = "windows")]
+    copy_sidecars_to_target();
     tauri_build::try_build(
         tauri_build::Attributes::new()
             .plugin(
@@ -36,6 +39,46 @@ fn main() {
             ),
     )
     .expect("tauri build");
+}
+
+/// dev 模式下把 sidecar 可执行文件 + 依赖 DLL + tessdata 复制到 exe 所在目录
+/// （target/debug 或 target/release），供 `sidecar::resolve` 在 exe 目录里找到。
+/// 打包（tauri build）走 externalBin/resources，不依赖这条。
+#[cfg(target_os = "windows")]
+fn copy_sidecars_to_target() {
+    use std::path::PathBuf;
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".into());
+    let target_dir = manifest_dir.join("target").join(&profile);
+    let binaries_dir = manifest_dir.join("binaries");
+
+    let _ = std::fs::create_dir_all(&target_dir);
+    let Ok(entries) = std::fs::read_dir(&binaries_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
+            continue;
+        };
+        if name.ends_with(".exe") || name.ends_with(".dll") {
+            let _ = std::fs::copy(&path, target_dir.join(&name));
+        }
+    }
+
+    let tessdata_src = binaries_dir.join("tessdata");
+    if tessdata_src.is_dir() {
+        let tessdata_dst = target_dir.join("binaries").join("tessdata");
+        let _ = std::fs::create_dir_all(&tessdata_dst);
+        if let Ok(entries) = std::fs::read_dir(&tessdata_src) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) {
+                    let _ = std::fs::copy(&path, tessdata_dst.join(&name));
+                }
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
