@@ -110,6 +110,11 @@ export const videos = {
     invoke("cmd_video_cover", { videoId }),
   updateTitle: (id: string, title: string): Promise<Video> =>
     invoke("cmd_update_video_title", { id, title }),
+  /** 智能重命名预览：从标题提取章节号+主题，按模板生成新标题（不落库，供预览确认）。 */
+  smartRenamePreview: (
+    videoIds: string[],
+  ): Promise<Array<{ videoId: string; oldTitle: string; newTitle: string; sortKey: number | null }>> =>
+    invoke("cmd_smart_rename_preview", { videoIds }),
   delete: (id: string): Promise<void> => invoke("cmd_delete_video", { id }),
   restore: (id: string): Promise<void> => invoke("cmd_restore_video", { id }),
   purge: (id: string): Promise<void> => invoke("cmd_purge_video", { id }),

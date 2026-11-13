@@ -1851,6 +1851,12 @@
     "batchQuiz": "生成测验",
     "batchMindmap": "生成思维导图",
     "runBatch": "执行",
+    "smartRename": "智能重命名",
+    "autoSort": "自动排序",
+    "smartRenameTitle": "智能重命名预览",
+    "smartRenameHint": "确认后将按下方新标题重命名所选视频（可撤销）。",
+    "applyRename": "应用重命名",
+    "undoRename": "撤销重命名",
     "deleteSelected": "删除所选",
     "deleteSelectedConfirm": "删除所选的 {{count}} 项？\n共 {{videos}} 个视频会移入回收站，可在 30 天内恢复；选中的文件夹连同子文件夹一并删除。彻底删除后会释放处理产物（桌面端不会删除你导入的原视频文件）。"
   },

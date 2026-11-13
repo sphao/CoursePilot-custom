@@ -25,6 +25,7 @@ import {
   Pencil,
   Trash2,
   Wand2,
+  Undo2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
@@ -37,6 +38,7 @@ import { EmptyState } from "@/ui/empty-state";
 import { ErrorNote } from "@/ui/ErrorNote";
 import { IconButton } from "@/ui/icon-button";
 import { Button } from "@/ui/button";
+import { Modal } from "@/ui/dialog";
 import { Skeleton } from "@/ui/skeleton";
 import { Menu, MenuItem } from "@/ui/menu";
 import { ipc } from "@/lib/ipc";
@@ -470,6 +472,14 @@ export function CourseLibraryView({
   const [batchActions, setBatchActions] = useState<Set<string>>(
     () => new Set(["process", "chapters", "summary", "notes"]),
   );
+  // 智能重命名：预览数据 / 应用中 / 已应用历史（撤销用）。
+  const [renamePreview, setRenamePreview] = useState<
+    Array<{ videoId: string; oldTitle: string; newTitle: string; sortKey: number | null }> | null
+  >(null);
+  const [renameApplying, setRenameApplying] = useState(false);
+  const [renameHistory, setRenameHistory] = useState<Array<{ videoId: string; oldTitle: string }>>(
+    [],
+  );
   const exitSelection = useCallback(() => {
     setSelecting(false);
     setSelectedKeys(new Set());
@@ -624,6 +634,74 @@ export function CourseLibraryView({
     } finally {
       exitSelection();
     }
+  }
+
+  function selectedVideoIds(): string[] {
+    return selectedItems.filter((item) => item.kind === "video").map((item) => item.id);
+  }
+
+  // ---------- 智能重命名 / 自动排序 ----------
+  async function runSmartRename() {
+    const ids = selectedVideoIds();
+    if (ids.length === 0) return;
+    setBatchMenuOpen(false);
+    const preview = await ipc.videos.smartRenamePreview(ids);
+    setRenamePreview(preview);
+  }
+
+  async function applyRename() {
+    if (!renamePreview) return;
+    setRenameApplying(true);
+    try {
+      setRenameHistory(renamePreview.map((p) => ({ videoId: p.videoId, oldTitle: p.oldTitle })));
+      for (const p of renamePreview) {
+        await ipc.videos.updateTitle(p.videoId, p.newTitle);
+      }
+      if (selectedCourseId) {
+        await queryClient.invalidateQueries({ queryKey: qk.videos.list(selectedCourseId) });
+      }
+      setRenamePreview(null);
+      exitSelection();
+    } finally {
+      setRenameApplying(false);
+    }
+  }
+
+  async function undoRename() {
+    if (renameHistory.length === 0) return;
+    for (const h of renameHistory) {
+      await ipc.videos.updateTitle(h.videoId, h.oldTitle);
+    }
+    setRenameHistory([]);
+    if (selectedCourseId) {
+      await queryClient.invalidateQueries({ queryKey: qk.videos.list(selectedCourseId) });
+    }
+  }
+
+  async function runAutoSort() {
+    const ids = selectedVideoIds();
+    if (ids.length === 0) return;
+    setBatchMenuOpen(false);
+    const preview = await ipc.videos.smartRenamePreview(ids);
+    const sortMap = new Map(preview.map((p) => [p.videoId, p.sortKey]));
+    const allVideoIds = levelVideos.map((v) => v.id);
+    const sortedSelected = [...ids].sort((a, b) => {
+      const ka = sortMap.get(a);
+      const kb = sortMap.get(b);
+      if (ka == null && kb == null) return a.localeCompare(b);
+      if (ka == null) return 1;
+      if (kb == null) return -1;
+      return ka - kb;
+    });
+    const selectedSet = new Set(ids);
+    const newOrder: string[] = [];
+    let selIdx = 0;
+    for (const id of allVideoIds) {
+      if (selectedSet.has(id)) newOrder.push(sortedSelected[selIdx++] ?? id);
+      else newOrder.push(id);
+    }
+    reorderLevel.mutate({ folderIds: levelFolders.map((f) => f.id), videoIds: newOrder });
+    exitSelection();
   }
 
   function changeView(next: LibraryView) {
@@ -1788,6 +1866,24 @@ export function CourseLibraryView({
               variant="ghost"
               size="sm"
               disabled={selectedItems.length === 0}
+              onClick={() => void runSmartRename()}
+            >
+              <Pencil className="h-4 w-4" />
+              <span className="max-sm:sr-only">{t("library.smartRename")}</span>
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={selectedItems.length === 0}
+              onClick={() => void runAutoSort()}
+            >
+              <List className="h-4 w-4" />
+              <span className="max-sm:sr-only">{t("library.autoSort")}</span>
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={selectedItems.length === 0}
               onClick={() => {
                 moveItems.reset();
                 setMoveRequest(selectedItems);
@@ -1806,10 +1902,44 @@ export function CourseLibraryView({
               <Trash2 className="h-4 w-4" />
               <span className="max-sm:sr-only">{t("home.delete")}</span>
             </Button>
+            {renameHistory.length > 0 && (
+              <Button variant="ghost" size="sm" onClick={() => void undoRename()}>
+                <Undo2 className="h-4 w-4" />
+                <span className="max-sm:sr-only">{t("library.undoRename")}</span>
+              </Button>
+            )}
             <Button size="sm" onClick={exitSelection}>
               {t("library.done")}
             </Button>
           </div>
+        )}
+        {renamePreview && (
+          <Modal
+            open
+            onOpenChange={(open) => {
+              if (!open) setRenamePreview(null);
+            }}
+            size="lg"
+            title={t("library.smartRenameTitle")}
+            description={t("library.smartRenameHint")}
+          >
+            <div className="max-h-[50vh] overflow-y-auto">
+              {renamePreview.map((p) => (
+                <div key={p.videoId} className="border-b border-[var(--border-subtle)] py-2">
+                  <div className="text-xs text-[var(--text-faint)] line-through">{p.oldTitle}</div>
+                  <div className="text-sm text-[var(--text-strong)]">{p.newTitle}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setRenamePreview(null)}>
+                {t("common.cancel")}
+              </Button>
+              <Button size="sm" disabled={renameApplying} onClick={() => void applyRename()}>
+                {t("library.applyRename")}
+              </Button>
+            </div>
+          </Modal>
         )}
       </div>
       {moveRequest && selectedCourseId && (

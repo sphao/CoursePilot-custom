@@ -1865,6 +1865,12 @@
     "batchQuiz": "Generate quiz",
     "batchMindmap": "Generate mind map",
     "runBatch": "Run",
+    "smartRename": "Smart rename",
+    "autoSort": "Auto sort",
+    "smartRenameTitle": "Smart rename preview",
+    "smartRenameHint": "The selected videos will be renamed to the titles below (undoable).",
+    "applyRename": "Apply rename",
+    "undoRename": "Undo rename",
     "deleteSelected": "Delete selected",
     "deleteSelectedConfirm": "Delete the {{count}} selected items?\n{{videos}} videos will move to the recycle bin and can be restored within 30 days; selected folders are deleted together with their subfolders. Derived files are freed after permanent deletion (on desktop, the original video files you imported are kept)."
   },
