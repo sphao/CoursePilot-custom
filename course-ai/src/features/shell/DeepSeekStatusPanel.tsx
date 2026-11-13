@@ -3,24 +3,34 @@ import { useTranslation } from "react-i18next";
 import { ipc } from "@/lib/ipc";
 import { qk } from "@/lib/queryKeys";
 
-/** 判断当前是否处于高峰时段（DeepSeek 官方：工作日 9-12、14-18 高峰，其余含周末平价）。 */
-function computePeak(now: Date): { isPeak: boolean; position: number } {
+/** deepseek-flash 定价（元/百万 token）：输入 0.3，输出 1.2。 */
+const PRICE_IN_PER_M = 0.3;
+const PRICE_OUT_PER_M = 1.2;
+
+/** 判断当前是否处于高峰时段（工作日 9-12、14-18），返回当前小时位置 0-24。 */
+function computePeak(now: Date): { isPeak: boolean; hour: number } {
   const day = now.getDay();
   const isWeekend = day === 0 || day === 6;
   const h = now.getHours() + now.getMinutes() / 60;
   const isPeak = !isWeekend && ((h >= 9 && h < 12) || (h >= 14 && h < 18));
-  return { isPeak, position: h / 24 };
+  return { isPeak, hour: h };
 }
 
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
+/** 把「天数」格式化成「X天X小时X分」。 */
+function formatDuration(days: number): string {
+  if (!Number.isFinite(days) || days <= 0) return "--";
+  const totalMin = Math.round(days * 24 * 60);
+  const d = Math.floor(totalMin / (24 * 60));
+  const h = Math.floor((totalMin % (24 * 60)) / 60);
+  const m = totalMin % 60;
+  if (d > 0) return `${d}天${h}小时${m}分`;
+  if (h > 0) return `${h}小时${m}分`;
+  return `${m}分`;
 }
 
 /**
- * 侧边栏底部的 DeepSeek 状态面板，复刻 DSH「账号与余额」：
- * 余额卡片（赠金 + 充值余额 + 充值入口）、今日用量、峰谷时段时间轴。
+ * 侧边栏底部 DeepSeek 状态面板，复刻 DSH：
+ * 今日消费金额、余额、余额可用进度条 + 剩余时间、峰谷时段时间轴。
  */
 export function DeepSeekStatusPanel() {
   const { t } = useTranslation();
@@ -37,60 +47,64 @@ export function DeepSeekStatusPanel() {
   });
   const now = new Date();
   const peak = computePeak(now);
-  const bal = balance.data;
-  const totalTokens = (usage.data ?? []).reduce(
-    (sum, u) => sum + u.prompt_tokens + u.completion_tokens,
-    0,
-  );
+
+  // 今日消费金额（token × 定价）
+  const todayCost = (usage.data ?? []).reduce((sum, u) => {
+    return (
+      sum +
+      (u.prompt_tokens / 1_000_000) * PRICE_IN_PER_M +
+      (u.completion_tokens / 1_000_000) * PRICE_OUT_PER_M
+    );
+  }, 0);
+
+  const totalBalance = balance.data ? Number(balance.data.totalBalance) : null;
+  // 余额可用天数预估 = 余额 ÷ 今日消费速率
+  const daysLeft =
+    totalBalance != null && todayCost > 0 ? totalBalance / todayCost : null;
+  // 进度条：今日消费占「今日 + 余额」的比例（消耗速度视觉化）
+  const burnRatio =
+    totalBalance != null && totalBalance + todayCost > 0
+      ? Math.min(1, todayCost / (totalBalance + todayCost))
+      : 0;
+
+  const money = (n: number | null) =>
+    n == null ? "--" : n.toFixed(4).replace(/\.?0+$/, "");
 
   return (
-    <div className="flex flex-col gap-2 px-3 py-2 text-xs" role="status">
-      {/* 余额卡片：复刻 DSH balanceCard（赠金 + 充值余额 + 充值入口） */}
-      <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-card)] px-3 py-2">
-        <div className="flex items-center justify-between text-[11px] text-[var(--text-faint)]">
-          <span>{t("nav.deepseekAccount")}</span>
-        </div>
-        {bal ? (
-          <>
-            <div className="mt-1 flex items-baseline justify-between gap-2">
-              <span className="text-[11px] text-[var(--text-faint)]">{t("nav.grantedBalance")}</span>
-              <span className="tabular-nums text-base font-semibold text-[var(--text-strong)]">
-                ¥{bal.grantedBalance}
-              </span>
-            </div>
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="text-[11px] text-[var(--text-faint)]">{t("nav.toppedUpBalance")}</span>
-              <span className="tabular-nums text-base font-semibold text-[var(--text-strong)]">
-                ¥{bal.toppedUpBalance}
-              </span>
-            </div>
-            <div className="mt-1.5 flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-1.5">
-              <span className="text-[11px] text-[var(--text-faint)]">{t("nav.totalBalance")}</span>
-              <span className="tabular-nums font-medium text-[var(--text-strong)]">
-                ¥{bal.totalBalance}
-              </span>
-            </div>
-          </>
-        ) : (
-          <div className="mt-1 text-[var(--text-faint)]">{t("nav.balanceUnavailable")}</div>
-        )}
-        <a
-          href="https://platform.deepseek.com/top_up"
-          target="_blank"
-          rel="noreferrer"
-          className="mt-2 flex h-7 items-center justify-center rounded-md border border-[var(--border-subtle)] text-[11px] text-[var(--text-strong)] no-underline hover:bg-[var(--surface-card-hover)]"
-        >
-          {t("nav.topUp")}
-        </a>
-      </div>
-
-      {/* 今日用量 */}
-      <div className="flex items-center justify-between gap-2">
+    <div className="flex flex-col gap-1.5 px-3 py-2 text-xs" role="status">
+      {/* 今日消费金额 */}
+      <div className="flex items-baseline justify-between gap-2">
         <span className="text-[var(--text-faint)]">{t("nav.deepseekToday")}</span>
-        <span className="tabular-nums text-[var(--text-strong)]">{formatTokens(totalTokens)} tok</span>
+        <span className="tabular-nums font-medium text-[var(--text-strong)]">
+          ¥{todayCost.toFixed(4)}
+        </span>
       </div>
 
-      {/* 峰谷时段时间轴（0-24h，高峰区间高亮，白点=当前时间） */}
+      {/* 余额 */}
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="flex items-center gap-1 text-[var(--text-faint)]">
+          <span className="inline-block h-3 w-3 rounded-full bg-sky-400 align-middle" aria-hidden="true" />
+          {t("nav.deepseekBalance")}
+        </span>
+        <span className="tabular-nums font-semibold text-[var(--text-strong)]">
+          ¥{money(totalBalance)}
+        </span>
+      </div>
+
+      {/* 余额可用进度条 + 剩余时间 */}
+      <div className="flex items-center gap-2">
+        <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--surface-card-hover)]">
+          <div
+            className="h-full rounded-full bg-sky-400"
+            style={{ width: `${burnRatio * 100}%` }}
+          />
+        </div>
+        <span className="shrink-0 tabular-nums text-[10px] text-[var(--text-faint)]">
+          {t("nav.remaining")} {formatDuration(daysLeft ?? 0)}
+        </span>
+      </div>
+
+      {/* 峰谷时段时间轴 */}
       <div>
         <div className="flex items-center justify-between text-[10px] leading-none">
           <span className={peak.isPeak ? "font-medium text-[var(--status-err)]" : "font-medium text-emerald-500"}>
@@ -98,23 +112,15 @@ export function DeepSeekStatusPanel() {
           </span>
           <span className="text-[var(--text-faint)]">{t("nav.peakRange")}</span>
         </div>
-        <div className="relative mt-1.5 h-2 w-full overflow-hidden rounded-full bg-[var(--surface-card-hover)]">
-          {/* 高峰区间 9-12 */}
-          <div className="absolute top-0 h-full bg-red-400/60" style={{ left: "37.5%", width: "12.5%" }} />
-          {/* 高峰区间 14-18 */}
-          <div className="absolute top-0 h-full bg-red-400/60" style={{ left: "58.33%", width: "16.67%" }} />
+        <div className="relative mt-1 h-1.5 w-full overflow-hidden rounded-full bg-[var(--surface-card-hover)]">
+          {/* 高峰区间 9-12、14-18 */}
+          <div className="absolute top-0 h-full bg-sky-400/50" style={{ left: "37.5%", width: "12.5%" }} />
+          <div className="absolute top-0 h-full bg-sky-400/50" style={{ left: "58.33%", width: "16.67%" }} />
           {/* 当前时间指针 */}
           <div
-            className="absolute top-1/2 h-3 w-[3px] -translate-y-1/2 rounded-full bg-[var(--text-strong)] ring-1 ring-black/20"
-            style={{ left: `calc(${peak.position * 100}% - 1px)` }}
+            className="absolute top-1/2 h-2.5 w-[3px] -translate-y-1/2 rounded-full bg-[var(--text-strong)]"
+            style={{ left: `calc(${(peak.hour / 24) * 100}% - 1px)` }}
           />
-        </div>
-        <div className="mt-0.5 flex justify-between text-[9px] tabular-nums text-[var(--text-faint)]">
-          <span>0</span>
-          <span>6</span>
-          <span>12</span>
-          <span>18</span>
-          <span>24</span>
         </div>
       </div>
     </div>
