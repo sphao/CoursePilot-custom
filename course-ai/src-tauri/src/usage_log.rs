@@ -27,6 +27,8 @@ pub struct UsageTotals {
     pub completion_tokens: i64,
     /// 计费在输出里、但我们只读正式回答、并不使用的思考 token。
     pub reasoning_tokens: i64,
+    /// 按 DeepSeek 官方峰谷价 + 缓存命中折扣折算的人民币费用（元，参考值）。
+    pub cost: f64,
 }
 
 type Key = (String, String);
@@ -34,6 +36,39 @@ type Key = (String, String);
 fn store() -> &'static Mutex<HashMap<Key, UsageTotals>> {
     static STORE: OnceLock<Mutex<HashMap<Key, UsageTotals>>> = OnceLock::new();
     STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// DeepSeek 官方峰谷价（元/百万 token）：(缓存命中, 缓存未命中, 输出)。
+/// 空闲时段为高峰一半；工作日 9-12、14-18 为高峰，其余（含周末节假日）空闲。
+fn price_for(model: &str, is_peak: bool) -> (f64, f64, f64) {
+    let is_pro = model.contains("pro") || model.contains("v4-pro");
+    match (is_pro, is_peak) {
+        (true, true) => (0.30, 9.0, 27.0),
+        (true, false) => (0.15, 4.5, 13.5),
+        (false, true) => (0.04, 2.0, 8.0),
+        (false, false) => (0.02, 1.0, 4.0),
+    }
+}
+
+/// 当前是否高峰时段（工作日 9-12、14-18）。
+fn current_is_peak() -> bool {
+    use chrono::{Datelike, Local, Timelike};
+    let now = Local::now();
+    let wd = now.weekday().num_days_from_monday(); // 0=周一
+    if wd >= 5 {
+        return false;
+    }
+    let h = now.hour() as f64 + now.minute() as f64 / 60.0;
+    (h >= 9.0 && h < 12.0) || (h >= 14.0 && h < 18.0)
+}
+
+/// 折算本次调用的费用（元）：未命中输入 + 命中输入 + 输出，各按对应单价。
+fn calc_cost(model: &str, usage: &Usage) -> f64 {
+    let (hit, miss, out) = price_for(model, current_is_peak());
+    let miss_input = (usage.prompt_tokens - usage.cached_tokens).max(0) as f64;
+    miss_input / 1e6 * miss
+        + usage.cached_tokens as f64 / 1e6 * hit
+        + usage.completion_tokens as f64 / 1e6 * out
 }
 
 /// 记一次调用。端点没报用量时不要调用它——那样会把「没报」记成「零消耗」，
@@ -52,6 +87,7 @@ pub fn record(label: &str, model: &str, usage: &Usage) {
     entry.cached_tokens += usage.cached_tokens;
     entry.completion_tokens += usage.completion_tokens;
     entry.reasoning_tokens += usage.reasoning_tokens;
+    entry.cost += calc_cost(model, usage);
 }
 
 /// 各档累计用量，输入 token 多的排前面（花钱多的先看见）。

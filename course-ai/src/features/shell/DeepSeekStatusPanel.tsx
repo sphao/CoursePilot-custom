@@ -3,10 +3,6 @@ import { useTranslation } from "react-i18next";
 import { ipc } from "@/lib/ipc";
 import { qk } from "@/lib/queryKeys";
 
-/** deepseek-flash 定价（元/百万 token）：输入 0.3，输出 1.2。 */
-const PRICE_IN_PER_M = 0.3;
-const PRICE_OUT_PER_M = 1.2;
-
 const DAY_MIN = 24 * 60;
 const WEEK_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 
@@ -116,13 +112,7 @@ export function DeepSeekStatusPanel() {
   const now = new Date();
   const peak = peakInfo(now);
 
-  const todayCost = (usage.data ?? []).reduce((sum, u) => {
-    return (
-      sum +
-      (u.prompt_tokens / 1_000_000) * PRICE_IN_PER_M +
-      (u.completion_tokens / 1_000_000) * PRICE_OUT_PER_M
-    );
-  }, 0);
+  const todayCost = (usage.data ?? []).reduce((sum, u) => sum + (u.cost ?? 0), 0);
 
   const totalBalance = balance.data ? Number(balance.data.totalBalance) : null;
   const money = (n: number | null) =>

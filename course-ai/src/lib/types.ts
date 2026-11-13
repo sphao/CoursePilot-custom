@@ -208,6 +208,7 @@ export interface LlmUsageTotals {
   cached_tokens: number;
   completion_tokens: number;
   reasoning_tokens: number;
+  cost: number;
 }
 
 export interface TrashedVideo {
