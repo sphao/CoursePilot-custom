@@ -474,7 +474,7 @@ export function CourseLibraryView({
   );
   // 智能重命名：预览数据 / 应用中 / 已应用历史（撤销用）。
   const [renamePreview, setRenamePreview] = useState<
-    Array<{ videoId: string; oldTitle: string; newTitle: string; sortKey: number | null; groupKey: string }> | null
+    Array<{ videoId: string; oldTitle: string; newTitle: string; number: number | null; chapterKey: number | null; groupKey: string }> | null
   >(null);
   const [renameApplying, setRenameApplying] = useState(false);
   const [renameHistory, setRenameHistory] = useState<Array<{ videoId: string; oldTitle: string }>>(
@@ -688,16 +688,21 @@ export function CourseLibraryView({
     const sortedSelected = [...ids].sort((a, b) => {
       const ma = metaMap.get(a);
       const mb = metaMap.get(b);
-      // 先按分组（讲师名），再组内按章节序号
+      // 先按分组（作者），组内：序号优先 > 章节 > 无序号无章节排最后
       const ga = ma?.groupKey ?? "";
       const gb = mb?.groupKey ?? "";
       if (ga !== gb) return ga.localeCompare(gb);
-      const ka = ma?.sortKey ?? null;
-      const kb = mb?.sortKey ?? null;
-      if (ka == null && kb == null) return (ma?.newTitle ?? "").localeCompare(mb?.newTitle ?? "");
-      if (ka == null) return 1;
-      if (kb == null) return -1;
-      return ka - kb;
+      const na = ma?.number ?? null;
+      const nb = mb?.number ?? null;
+      if (na != null && nb != null) return na - nb;
+      if (na != null) return -1;
+      if (nb != null) return 1;
+      const ca = ma?.chapterKey ?? null;
+      const cb = mb?.chapterKey ?? null;
+      if (ca != null && cb != null) return ca - cb;
+      if (ca != null) return -1;
+      if (cb != null) return 1;
+      return 0;
     });
     const selectedSet = new Set(ids);
     const newOrder: string[] = [];
@@ -1237,6 +1242,12 @@ export function CourseLibraryView({
               <VideoCover
                 videoId={video.id}
                 className="absolute inset-0 h-full w-full"
+              />
+              {/* 处理状态圆点：绿=已处理，红=未处理/失败，蓝=处理中。 */}
+              <span
+                aria-label={t(statusLabelKey[displayStatus(video)])}
+                title={t(statusLabelKey[displayStatus(video)])}
+                className={`absolute left-1 top-1 z-10 h-3 w-3 rounded-full ring-2 ring-black/25 ${statusDotClass[displayStatus(video)]}`}
               />
               {progress.ratio >= WATCHED_RATIO && (
                 <span className="done" role="img" aria-label={t("home.watched")}>

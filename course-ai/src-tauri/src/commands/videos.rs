@@ -1118,20 +1118,6 @@ fn parse_chapter_number(s: &str) -> Option<u32> {
     if any { Some(total) } else { None }
 }
 
-/// 去掉 B 站分 P 前缀（pNN / PNN）。
-fn strip_p_prefix(title: &str) -> String {
-    let t = title.trim();
-    let lower = t.to_lowercase();
-    if lower.starts_with('p') {
-        let rest = &t[1..];
-        let digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
-        if digits > 0 {
-            return rest[digits..].trim_start().to_string();
-        }
-    }
-    t.to_string()
-}
-
 /// 清理主题：去掉开头/结尾的分隔符与空白。
 fn clean_topic(s: &str) -> String {
     s.trim()
@@ -1216,34 +1202,60 @@ fn extract_chapter(cleaned: &str) -> (Option<u32>, Option<String>, String) {
     (None, None, clean_topic(cleaned))
 }
 
-/// 从标题解析出（讲师名, 章节序号, 章节原文, 主题）。
-fn parse_lecture(title: &str) -> (Option<String>, Option<u32>, Option<String>, String) {
-    let title = strip_extension(title);
-    let (lecturer, rest) = extract_lecturer(&title);
-    let cleaned = strip_p_prefix(&rest);
-    let (num, chapter_text, topic) = extract_chapter(&cleaned);
-    (lecturer, num, chapter_text, topic)
+/// 提取 pNN 序号：返回 (序号, 去掉 pNN 后的内容)。
+fn extract_p_number(s: &str) -> (Option<u32>, String) {
+    let Some(pos) = find_p_number(s) else {
+        return (None, s.to_string());
+    };
+    let after = &s[pos..];
+    let digits: String = after[1..].chars().take_while(|c| c.is_ascii_digit()).collect();
+    let num = digits.parse::<u32>().ok();
+    let rest = &after[1 + digits.len()..];
+    (num, rest.trim_start().to_string())
 }
 
-/// 按「讲师名-第X节-主题」模板生成新标题（无讲师名/章节时省略对应部分）。
-fn build_lecture_title(
-    lecturer: Option<&str>,
-    chapter_text: Option<&str>,
-    topic: &str,
-) -> String {
+/// 从标题解析出的结构化信息。
+struct ParsedTitle {
+    lecturer: Option<String>,
+    p_number: Option<u32>,
+    chapter_num: Option<u32>,
+    chapter_text: Option<String>,
+    topic: String,
+}
+
+/// 从标题解析出（讲师名, p 序号, 章节序号, 章节原文, 主题）。
+fn parse_lecture(title: &str) -> ParsedTitle {
+    let title = strip_extension(title);
+    let (lecturer, rest) = extract_lecturer(&title);
+    let (p_number, rest) = extract_p_number(&rest);
+    let (chapter_num, chapter_text, topic) = extract_chapter(&rest);
+    ParsedTitle {
+        lecturer,
+        p_number,
+        chapter_num,
+        chapter_text,
+        topic,
+    }
+}
+
+/// 按「作者-p序号-章节-标题」模板生成新标题（各部分缺省时省略）。
+fn build_lecture_title(p: &ParsedTitle, number: Option<u32>) -> String {
     let mut parts: Vec<String> = Vec::new();
-    if let Some(l) = lecturer {
+    if let Some(l) = &p.lecturer {
         if !l.is_empty() {
-            parts.push(l.to_string());
+            parts.push(l.clone());
         }
     }
-    if let Some(c) = chapter_text {
+    if let Some(n) = number {
+        parts.push(format!("p{n:02}"));
+    }
+    if let Some(c) = &p.chapter_text {
         if !c.is_empty() {
-            parts.push(c.to_string());
+            parts.push(c.clone());
         }
     }
-    if !topic.is_empty() {
-        parts.push(topic.to_string());
+    if !p.topic.is_empty() {
+        parts.push(p.topic.clone());
     }
     parts.join("-")
 }
@@ -1254,30 +1266,79 @@ pub struct SmartRenamePreview {
     pub video_id: String,
     pub old_title: String,
     pub new_title: String,
-    pub sort_key: Option<u32>,
+    pub number: Option<u32>,
+    pub chapter_key: Option<u32>,
     pub group_key: String,
 }
 
-/// 智能重命名预览：从原标题提取讲师名、章节号、主题，按模板生成新标题（不落库）。
+/// 智能重命名预览：解析所有标题，按作者分组；每组序号覆盖完整则保留、缺则重编号，按模板生成新标题（不落库）。
 #[tauri::command]
 pub async fn cmd_smart_rename_preview(
     state: State<'_, AppState>,
     video_ids: Vec<String>,
 ) -> AppResult<Vec<SmartRenamePreview>> {
-    let mut results = Vec::new();
+    let mut items: Vec<(String, String, ParsedTitle)> = Vec::new();
     for video_id in video_ids {
         let video: Video = sqlx::query_as("SELECT * FROM videos WHERE id=?")
             .bind(&video_id)
             .fetch_one(&state.db.pool)
             .await?;
-        let (lecturer, num, chapter_text, topic) = parse_lecture(&video.title);
-        let new_title = build_lecture_title(lecturer.as_deref(), chapter_text.as_deref(), &topic);
+        let parsed = parse_lecture(&video.title);
+        items.push((video_id, video.title, parsed));
+    }
+
+    // 按作者分组（保持首次出现顺序）。
+    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+    let mut group_index: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for (i, (_, _, parsed)) in items.iter().enumerate() {
+        let key = parsed.lecturer.clone().unwrap_or_default();
+        let gi = *group_index.entry(key.clone()).or_insert_with(|| {
+            groups.push((key, Vec::new()));
+            groups.len() - 1
+        });
+        groups[gi].1.push(i);
+    }
+
+    // 每组决定序号：p 覆盖完整（从 1 连续）则保留；否则按 (p, 章节) 排序重编号 1..n。
+    let mut number_of: std::collections::HashMap<usize, Option<u32>> =
+        std::collections::HashMap::new();
+    for (_key, indices) in &groups {
+        let all_have = indices.iter().all(|&i| items[i].2.p_number.is_some());
+        let complete = all_have
+            && {
+                let nums: Vec<u32> = indices.iter().map(|&i| items[i].2.p_number.unwrap()).collect();
+                !nums.is_empty()
+                    && *nums.iter().min().unwrap() == 1
+                    && *nums.iter().max().unwrap() == nums.len() as u32
+            };
+        if complete {
+            for &i in indices {
+                number_of.insert(i, items[i].2.p_number);
+            }
+        } else {
+            let mut sorted = indices.clone();
+            sorted.sort_by_key(|&i| {
+                let p = &items[i].2;
+                p.p_number.or(p.chapter_num).unwrap_or(u32::MAX)
+            });
+            for (rank, &i) in sorted.iter().enumerate() {
+                number_of.insert(i, Some((rank + 1) as u32));
+            }
+        }
+    }
+
+    let mut results = Vec::new();
+    for (i, (video_id, old_title, parsed)) in items.iter().enumerate() {
+        let number = number_of[&i];
+        let new_title = build_lecture_title(parsed, number);
         results.push(SmartRenamePreview {
-            video_id,
-            old_title: video.title,
+            video_id: video_id.clone(),
+            old_title: old_title.clone(),
             new_title,
-            sort_key: num,
-            group_key: lecturer.unwrap_or_default(),
+            number,
+            chapter_key: parsed.chapter_num,
+            group_key: parsed.lecturer.clone().unwrap_or_default(),
         });
     }
     Ok(results)
