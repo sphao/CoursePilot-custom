@@ -1143,11 +1143,52 @@ fn clean_topic(s: &str) -> String {
 
 const CHAPTER_UNITS: [&str; 7] = ["节课", "节", "讲", "章", "课", "部分", "单元"];
 
-/// 从标题解析出（章节序号, 主题）。无章节号时序号为 None，主题为清理后的标题。
-fn parse_lecture(title: &str) -> (Option<u32>, String) {
-    let cleaned = strip_p_prefix(title);
+/// 去掉常见视频扩展名。
+fn strip_extension(title: &str) -> String {
+    let lower = title.to_lowercase();
+    for ext in [".mp4", ".mkv", ".flv", ".avi", ".mov", ".ts", ".webm", ".m4v"] {
+        if lower.ends_with(ext) {
+            return title[..title.len() - ext.len()].to_string();
+        }
+    }
+    title.to_string()
+}
+
+/// 找 "pNN" 的位置（B 站分 P 序号，前面须是空白或开头）。
+fn find_p_number(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    for i in 0..s.len().saturating_sub(1) {
+        if (bytes[i] == b'p' || bytes[i] == b'P')
+            && bytes[i + 1].is_ascii_digit()
+            && (i == 0 || bytes[i - 1].is_ascii_whitespace())
+        {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// 提取讲师名：形如「——讲师名 pNN」（讲师名在「——」和 pNN 之间）。
+/// 返回 (讲师名, 去掉讲师名后的剩余部分)；无讲师名时返回 (None, 原标题)。
+fn extract_lecturer(title: &str) -> (Option<String>, String) {
+    for sep in ["——", "—"] {
+        if let Some(pos) = title.find(sep) {
+            let after = &title[pos + sep.len()..].trim_start();
+            if let Some(p_pos) = find_p_number(after) {
+                let lecturer = after[..p_pos].trim().to_string();
+                if !lecturer.is_empty() {
+                    return (Some(lecturer), after[p_pos..].trim_start().to_string());
+                }
+            }
+        }
+    }
+    (None, title.to_string())
+}
+
+/// 从（去掉扩展名/讲师名/分 P 后的）标题里提取章节号、章节原文、主题。
+fn extract_chapter(cleaned: &str) -> (Option<u32>, Option<String>, String) {
     let Some(di) = cleaned.find('第') else {
-        return (None, clean_topic(&cleaned));
+        return (None, None, clean_topic(cleaned));
     };
     let after_di = &cleaned[di + '第'.len_utf8()..];
     let num_len: usize = after_di
@@ -1156,30 +1197,55 @@ fn parse_lecture(title: &str) -> (Option<u32>, String) {
         .map(|c| c.len_utf8())
         .sum();
     if num_len == 0 {
-        return (None, clean_topic(&cleaned));
+        return (None, None, clean_topic(cleaned));
     }
     let num_str = &after_di[..num_len];
     let after_num = &after_di[num_len..];
     for unit in CHAPTER_UNITS {
         if after_num.starts_with(unit) {
             let num = parse_chapter_number(num_str);
+            // 保留章节原文（如「第十节」），排序用阿拉伯数字 num。
+            let chapter_text = format!("第{num_str}{unit}");
             let topic = clean_topic(&after_num[unit.len()..]);
             if topic.is_empty() {
-                return (num, clean_topic(&cleaned));
+                return (num, Some(chapter_text), clean_topic(cleaned));
             }
-            return (num, topic);
+            return (num, Some(chapter_text), topic);
         }
     }
-    (None, clean_topic(&cleaned))
+    (None, None, clean_topic(cleaned))
 }
 
-/// 按「课程名-第N讲-主题」模板生成新标题。
-fn build_lecture_title(course_name: &str, num: Option<u32>, topic: &str) -> String {
-    match num {
-        Some(n) if !topic.is_empty() => format!("{course_name}-第{n}讲-{topic}"),
-        Some(n) => format!("{course_name}-第{n}讲"),
-        None => format!("{course_name}-{topic}"),
+/// 从标题解析出（讲师名, 章节序号, 章节原文, 主题）。
+fn parse_lecture(title: &str) -> (Option<String>, Option<u32>, Option<String>, String) {
+    let title = strip_extension(title);
+    let (lecturer, rest) = extract_lecturer(&title);
+    let cleaned = strip_p_prefix(&rest);
+    let (num, chapter_text, topic) = extract_chapter(&cleaned);
+    (lecturer, num, chapter_text, topic)
+}
+
+/// 按「讲师名-第X节-主题」模板生成新标题（无讲师名/章节时省略对应部分）。
+fn build_lecture_title(
+    lecturer: Option<&str>,
+    chapter_text: Option<&str>,
+    topic: &str,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(l) = lecturer {
+        if !l.is_empty() {
+            parts.push(l.to_string());
+        }
     }
+    if let Some(c) = chapter_text {
+        if !c.is_empty() {
+            parts.push(c.to_string());
+        }
+    }
+    if !topic.is_empty() {
+        parts.push(topic.to_string());
+    }
+    parts.join("-")
 }
 
 #[derive(Debug, Serialize)]
@@ -1189,9 +1255,10 @@ pub struct SmartRenamePreview {
     pub old_title: String,
     pub new_title: String,
     pub sort_key: Option<u32>,
+    pub group_key: String,
 }
 
-/// 智能重命名预览：从原标题提取章节号与主题，按模板生成新标题（不落库）。
+/// 智能重命名预览：从原标题提取讲师名、章节号、主题，按模板生成新标题（不落库）。
 #[tauri::command]
 pub async fn cmd_smart_rename_preview(
     state: State<'_, AppState>,
@@ -1203,17 +1270,14 @@ pub async fn cmd_smart_rename_preview(
             .bind(&video_id)
             .fetch_one(&state.db.pool)
             .await?;
-        let course_name: String = sqlx::query_scalar("SELECT name FROM courses WHERE id=?")
-            .bind(&video.course_id)
-            .fetch_one(&state.db.pool)
-            .await?;
-        let (num, topic) = parse_lecture(&video.title);
-        let new_title = build_lecture_title(&course_name, num, &topic);
+        let (lecturer, num, chapter_text, topic) = parse_lecture(&video.title);
+        let new_title = build_lecture_title(lecturer.as_deref(), chapter_text.as_deref(), &topic);
         results.push(SmartRenamePreview {
             video_id,
             old_title: video.title,
             new_title,
             sort_key: num,
+            group_key: lecturer.unwrap_or_default(),
         });
     }
     Ok(results)

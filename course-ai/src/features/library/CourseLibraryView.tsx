@@ -474,7 +474,7 @@ export function CourseLibraryView({
   );
   // 智能重命名：预览数据 / 应用中 / 已应用历史（撤销用）。
   const [renamePreview, setRenamePreview] = useState<
-    Array<{ videoId: string; oldTitle: string; newTitle: string; sortKey: number | null }> | null
+    Array<{ videoId: string; oldTitle: string; newTitle: string; sortKey: number | null; groupKey: string }> | null
   >(null);
   const [renameApplying, setRenameApplying] = useState(false);
   const [renameHistory, setRenameHistory] = useState<Array<{ videoId: string; oldTitle: string }>>(
@@ -683,12 +683,18 @@ export function CourseLibraryView({
     if (ids.length === 0) return;
     setBatchMenuOpen(false);
     const preview = await ipc.videos.smartRenamePreview(ids);
-    const sortMap = new Map(preview.map((p) => [p.videoId, p.sortKey]));
+    const metaMap = new Map(preview.map((p) => [p.videoId, p]));
     const allVideoIds = levelVideos.map((v) => v.id);
     const sortedSelected = [...ids].sort((a, b) => {
-      const ka = sortMap.get(a);
-      const kb = sortMap.get(b);
-      if (ka == null && kb == null) return a.localeCompare(b);
+      const ma = metaMap.get(a);
+      const mb = metaMap.get(b);
+      // 先按分组（讲师名），再组内按章节序号
+      const ga = ma?.groupKey ?? "";
+      const gb = mb?.groupKey ?? "";
+      if (ga !== gb) return ga.localeCompare(gb);
+      const ka = ma?.sortKey ?? null;
+      const kb = mb?.sortKey ?? null;
+      if (ka == null && kb == null) return (ma?.newTitle ?? "").localeCompare(mb?.newTitle ?? "");
       if (ka == null) return 1;
       if (kb == null) return -1;
       return ka - kb;
