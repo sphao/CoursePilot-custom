@@ -359,7 +359,7 @@ fn subtitle_shortcut(subtitle_path: Option<&str>) -> Option<std::path::PathBuf> 
 const LOCAL_ASR_WAITING: &str = "排队等待本地识别";
 /// 同时处理的视频数（设置项），默认 2。
 const PROCESSING_CONCURRENCY_KEY: &str = "processing_concurrency";
-pub const DEFAULT_PROCESSING_CONCURRENCY: usize = 2;
+pub const DEFAULT_PROCESSING_CONCURRENCY: usize = 1;
 const MAX_PROCESSING_CONCURRENCY: usize = 6;
 
 async fn processing_limit(db: &crate::db::Db) -> usize {

@@ -1073,6 +1073,152 @@ pub async fn cmd_list_videos(
     list_videos_for_ui(&state.db, &course_id).await
 }
 
+// ---------- 智能重命名：从原标题提取「第 N 讲」与主题，按模板精简 ----------
+
+fn digit_value(ch: char) -> Option<u32> {
+    match ch {
+        '零' => Some(0),
+        '一' => Some(1),
+        '二' => Some(2),
+        '三' => Some(3),
+        '四' => Some(4),
+        '五' => Some(5),
+        '六' => Some(6),
+        '七' => Some(7),
+        '八' => Some(8),
+        '九' => Some(9),
+        _ => None,
+    }
+}
+
+/// 中文/阿拉伯数字 → 阿拉伯数字（支持「零」到「九十九」）。
+fn parse_chapter_number(s: &str) -> Option<u32> {
+    if let Ok(n) = s.trim().parse::<u32>() {
+        return Some(n);
+    }
+    let mut total = 0u32;
+    let mut section = 0u32;
+    let mut any = false;
+    for ch in s.chars() {
+        if ch == '十' {
+            if section == 0 {
+                section = 1;
+            }
+            total += section * 10;
+            section = 0;
+            any = true;
+        } else if let Some(d) = digit_value(ch) {
+            section = d;
+            any = true;
+        } else {
+            return None;
+        }
+    }
+    total += section;
+    if any { Some(total) } else { None }
+}
+
+/// 去掉 B 站分 P 前缀（pNN / PNN）。
+fn strip_p_prefix(title: &str) -> String {
+    let t = title.trim();
+    let lower = t.to_lowercase();
+    if lower.starts_with('p') {
+        let rest = &t[1..];
+        let digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+        if digits > 0 {
+            return rest[digits..].trim_start().to_string();
+        }
+    }
+    t.to_string()
+}
+
+/// 清理主题：去掉开头/结尾的分隔符与空白。
+fn clean_topic(s: &str) -> String {
+    s.trim()
+        .trim_start_matches(['—', '–', '-', ':', '：', ' ', '\t', '、', '·', '.', '。'])
+        .trim_end_matches(['—', '–', '-', ' ', '\t', '。'])
+        .trim()
+        .to_string()
+}
+
+const CHAPTER_UNITS: [&str; 7] = ["节课", "节", "讲", "章", "课", "部分", "单元"];
+
+/// 从标题解析出（章节序号, 主题）。无章节号时序号为 None，主题为清理后的标题。
+fn parse_lecture(title: &str) -> (Option<u32>, String) {
+    let cleaned = strip_p_prefix(title);
+    let Some(di) = cleaned.find('第') else {
+        return (None, clean_topic(&cleaned));
+    };
+    let after_di = &cleaned[di + '第'.len_utf8()..];
+    let num_len: usize = after_di
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || "零一二三四五六七八九十百".contains(*c))
+        .map(|c| c.len_utf8())
+        .sum();
+    if num_len == 0 {
+        return (None, clean_topic(&cleaned));
+    }
+    let num_str = &after_di[..num_len];
+    let after_num = &after_di[num_len..];
+    for unit in CHAPTER_UNITS {
+        if after_num.starts_with(unit) {
+            let num = parse_chapter_number(num_str);
+            let topic = clean_topic(&after_num[unit.len()..]);
+            if topic.is_empty() {
+                return (num, clean_topic(&cleaned));
+            }
+            return (num, topic);
+        }
+    }
+    (None, clean_topic(&cleaned))
+}
+
+/// 按「课程名-第N讲-主题」模板生成新标题。
+fn build_lecture_title(course_name: &str, num: Option<u32>, topic: &str) -> String {
+    match num {
+        Some(n) if !topic.is_empty() => format!("{course_name}-第{n}讲-{topic}"),
+        Some(n) => format!("{course_name}-第{n}讲"),
+        None => format!("{course_name}-{topic}"),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SmartRenamePreview {
+    pub video_id: String,
+    pub old_title: String,
+    pub new_title: String,
+    pub sort_key: Option<u32>,
+}
+
+/// 智能重命名预览：从原标题提取章节号与主题，按模板生成新标题（不落库）。
+#[tauri::command]
+pub async fn cmd_smart_rename_preview(
+    state: State<'_, AppState>,
+    video_ids: Vec<String>,
+) -> AppResult<Vec<SmartRenamePreview>> {
+    let mut results = Vec::new();
+    for video_id in video_ids {
+        let video: Video = sqlx::query_as("SELECT * FROM videos WHERE id=?")
+            .bind(&video_id)
+            .fetch_one(&state.db.pool)
+            .await?;
+        let course_name: String = sqlx::query_scalar("SELECT name FROM courses WHERE id=?")
+            .bind(&video.course_id)
+            .fetch_one(&state.db.pool)
+            .await?;
+        let (num, topic) = parse_lecture(&video.title);
+        let new_title = build_lecture_title(&course_name, num, &topic);
+        results.push(SmartRenamePreview {
+            video_id,
+            old_title: video.title,
+            new_title,
+            sort_key: num,
+        });
+    }
+    Ok(results)
+}
+
 #[tauri::command]
 pub async fn cmd_update_video_title(
     state: State<'_, AppState>,

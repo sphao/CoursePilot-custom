@@ -88,6 +88,14 @@ const statusTone: Record<Video["processed_status"], BadgeTone> = {
   failed: "danger",
 };
 
+/** 缩略图角上的处理状态圆点：绿=已处理，红=未处理/失败，蓝=处理中。 */
+const statusDotClass: Record<Video["processed_status"], string> = {
+  pending: "bg-red-500",
+  processing: "bg-sky-500 animate-pulse",
+  done: "bg-emerald-500",
+  failed: "bg-red-600",
+};
+
 const VIEW_STORAGE_KEY = "course-ai-home-view";
 const GRID_DENSITY_KEY = "course-ai-grid-density";
 
@@ -1018,6 +1026,12 @@ export function CourseLibraryView({
                 </span>
               </span>
             )}
+            {/* 处理状态圆点：始终显示，绿=已处理，红=未处理/失败，蓝=处理中。 */}
+            <span
+              aria-label={t(statusLabelKey[displayStatus(video)])}
+              title={t(statusLabelKey[displayStatus(video)])}
+              className={`absolute left-2 top-2 z-10 h-3 w-3 rounded-full ring-2 ring-black/25 ${statusDotClass[displayStatus(video)]}`}
+            />
             {/* 「已处理」是常态，不再每张卡都挂徽标；只有待处理/处理中/失败才提示。 */}
             {displayStatus(video) !== "done" && <span className="st">{statusBadge(video)}</span>}
             {/* 时长未知就不显示角标：假的「00:00」会让人以为视频是空的。 */}

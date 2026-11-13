@@ -699,7 +699,7 @@ dependencies = [
 
 [[package]]
 name = "course-ai"
-version = "0.4.0"
+version = "0.4.0-custom"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
