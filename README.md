@@ -54,6 +54,15 @@ pnpm install
 pnpm tauri build   # 需要 Rust 工具链 + 前端依赖
 ```
 
+也可以只编 exe（不打包安装器）：
+
+```bash
+cd course-ai && pnpm build
+cd src-tauri && cargo build --release --features custom-protocol
+```
+
+**`--features custom-protocol` 不能省**：Tauri v2 靠这个 feature 区分生产版/开发版，漏了会内嵌不了前端，启动后窗口显示「无法访问此页面 / localhost 拒绝连接」。
+
 ## License
 
 基于 [wansui976/CoursePilot](https://github.com/wansui976/CoursePilot)（MIT），本仓库改动同样以 MIT 许可发布。

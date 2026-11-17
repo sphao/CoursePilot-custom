@@ -9,6 +9,12 @@ edition = "2021"
 name = "course_ai_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# 生产构建开关：启用后 tauri 内嵌前端资源（tauri://localhost），不再去连 build.devUrl。
+# `pnpm tauri build` 会自动带上；直接 `cargo build --release` 时必须手动加
+# `--features custom-protocol`，否则会被当成开发版，窗口里只剩「无法访问此页面 localhost」。
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 tauri-utils = { version = "2", features = ["build-2"] }
