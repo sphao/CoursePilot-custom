@@ -377,6 +377,13 @@ pub async fn cmd_video_ai_usage(
 mod tests {
     use super::*;
 
+    /// 进程内聚合是全局的，`cargo test` 默认多线程跑，几个「清空再累加」的测试会互相踩。
+    /// 用一把锁把它们串起来，只在测试里用。
+    fn store_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
     fn usage(prompt: i64, cached: i64, completion: i64, reasoning: i64) -> Usage {
         Usage {
             prompt_tokens: prompt,
@@ -388,6 +395,7 @@ mod tests {
 
     #[test]
     fn totals_accumulate_per_label_and_model() {
+        let _guard = store_guard();
         clear();
         record("notes", "deepseek-chat", &usage(1000, 0, 300, 0), false);
         record("notes", "deepseek-chat", &usage(1000, 900, 280, 0), false);
@@ -406,6 +414,7 @@ mod tests {
 
     #[test]
     fn the_same_label_on_a_different_model_is_counted_separately() {
+        let _guard = store_guard();
         // 换了模型缓存就不共享了，混在一起算命中率会把问题盖掉。
         clear();
         record("notes", "model-a", &usage(100, 0, 10, 0), false);
@@ -417,6 +426,7 @@ mod tests {
 
     #[test]
     fn reasoning_tokens_are_tracked_separately_from_the_answer() {
+        let _guard = store_guard();
         // 推理模型的思考过程按输出计费，而我们只读正式回答、把它整个丢掉。
         // 不单独记的话，这笔钱在账面上和有用的输出长得一模一样。
         clear();
