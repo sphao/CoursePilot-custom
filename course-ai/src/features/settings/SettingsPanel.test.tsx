@@ -1,5 +1,5 @@
 import "@/i18n";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsPanel } from "./SettingsPanel";
 
@@ -24,6 +24,11 @@ const { mockIpc } = vi.hoisted(() => ({
       purgeAll: vi.fn(),
     },
     notify: vi.fn(),
+    ocrModel: {
+      status: vi.fn(),
+      download: vi.fn(),
+      remove: vi.fn(),
+    },
   },
 }));
 const { pickDirectoryPathMock } = vi.hoisted(() => ({
@@ -47,6 +52,7 @@ const llmActionsMock = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/ipc", () => ({ ipc: mockIpc }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock("@/lib/mobileFiles", () => ({
   pickDirectoryPath: pickDirectoryPathMock,
   shareFile: shareFileMock,
@@ -114,6 +120,14 @@ describe("SettingsPanel", () => {
       .mockReset()
       .mockResolvedValue({ deleted_files: 1, deleted_dirs: 1, freed_bytes: 1_048_576 });
     confirmMock.mockReset().mockResolvedValue(true);
+    mockIpc.ocrModel.status.mockReset().mockResolvedValue({
+      available: true,
+      installed: false,
+      downloadSize: 31_114_837,
+      sizeOnDisk: 0,
+    });
+    mockIpc.ocrModel.download.mockReset().mockResolvedValue(undefined);
+    mockIpc.ocrModel.remove.mockReset().mockResolvedValue(undefined);
     saveFileMock.mockReset().mockResolvedValue("/tmp/CoursePilot-backup.db");
     shareFileMock.mockReset().mockResolvedValue(undefined);
     llmActionsMock.save.mockReset().mockResolvedValue(true);
@@ -179,6 +193,26 @@ describe("SettingsPanel", () => {
     expect((await screen.findAllByText("已配置")).length).toBeGreaterThan(0);
     expect(screen.queryByText(/留空 = 不修改/)).not.toBeInTheDocument();
     expect(mockIpc.secrets.has).toHaveBeenCalledWith("volcengine_asr_access_token");
+  });
+
+  it("offers Qwen3-ASR 1.7B on desktop with the GPU switch and hotwords, but not on phones", async () => {
+    mockIpc.settings.get.mockImplementation(async (key: string) =>
+      key === "asr_backend" ? "whisper" : key === "whisper_model" ? "qwen3-asr" : null,
+    );
+    const view = render(<SettingsPanel onClose={() => undefined} />);
+    fireEvent.click(await screen.findByRole("button", { name: "语音识别" }));
+    const model = await screen.findByLabelText("识别模型");
+    fireEvent.change(model, { target: { value: "qwen3-asr-1.7b" } });
+    await waitFor(() => expect(mockIpc.settings.set).toHaveBeenCalledWith("whisper_model", "qwen3-asr-1.7b"));
+    expect(await screen.findByLabelText("GPU 加速")).toBeInTheDocument();
+    expect(screen.getByLabelText("热词")).toBeInTheDocument();
+    view.unmount();
+
+    mockPlatform.isMobile.mockReturnValue(true);
+    render(<SettingsPanel onClose={() => undefined} />);
+    fireEvent.click(await screen.findByRole("button", { name: "语音识别" }));
+    const phoneModel = await screen.findByLabelText("识别模型");
+    expect(within(phoneModel).queryByRole("option", { name: /1\.7B/ })).not.toBeInTheDocument();
   });
 
   it("saves the default storage root on desktop", async () => {
@@ -373,18 +407,18 @@ describe("SettingsPanel", () => {
     vi.useRealTimers();
   });
 
-  it("turns automatic slide extraction off and persists the choice", async () => {
+  it("keeps automatic slide extraction off until the user turns it on", async () => {
     render(<SettingsPanel onClose={() => undefined} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "课件 / OCR" }));
-    // 没设置过时默认开着：导入后就自动跑，不用用户再点一次。
+    // 自改版默认关闭：导入后不自动提取课件，AI 只喂讲稿，省 token。
     const toggle = await screen.findByLabelText("导入后自动提取课件");
-    expect(toggle).toBeChecked();
+    expect(toggle).not.toBeChecked();
 
     fireEvent.click(toggle);
 
     await waitFor(() =>
-      expect(mockIpc.settings.set).toHaveBeenCalledWith("slides_auto_extract", "off"),
+      expect(mockIpc.settings.set).toHaveBeenCalledWith("slides_auto_extract", "on"),
     );
   });
 
@@ -456,6 +490,42 @@ describe("SettingsPanel", () => {
     expect(kai).toHaveAttribute("aria-pressed", "true");
     expect(localStorage.getItem("course-ai-reading-font")).toBe("kai");
     expect(document.documentElement.style.getPropertyValue("--font-reading")).toContain('"Kaiti SC"');
+  });
+
+  it("offers PaddleOCR on desktop: download, then delete switches back to local OCR (#8)", async () => {
+    render(<SettingsPanel onClose={() => undefined} />);
+    fireEvent.click(await screen.findByRole("button", { name: "课件 / OCR" }));
+    const engine = await screen.findByLabelText("OCR 引擎");
+    await waitFor(() =>
+      expect(within(engine).getByRole("option", { name: /PaddleOCR/ })).toBeInTheDocument(),
+    );
+    fireEvent.change(engine, { target: { value: "paddle" } });
+    await waitFor(() => expect(mockIpc.settings.set).toHaveBeenCalledWith("ocr_backend", "paddle"));
+    expect(await screen.findByText("还没下载（30 MB）")).toBeInTheDocument();
+
+    mockIpc.ocrModel.status.mockResolvedValue({
+      available: true,
+      installed: true,
+      downloadSize: 31_114_837,
+      sizeOnDisk: 31_114_837,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "下载" }));
+    await waitFor(() => expect(mockIpc.ocrModel.download).toHaveBeenCalled());
+    expect(await screen.findByText("已下载 · 30 MB")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    await waitFor(() => expect(mockIpc.ocrModel.remove).toHaveBeenCalled());
+    await waitFor(() => expect(mockIpc.settings.set).toHaveBeenCalledWith("ocr_backend", "local"));
+    expect(screen.getByLabelText("OCR 引擎")).toHaveValue("local");
+  });
+
+  it("hides PaddleOCR where the platform uses the system OCR", async () => {
+    mockIpc.ocrModel.status.mockResolvedValue({ available: false, installed: false, downloadSize: 0, sizeOnDisk: 0 });
+    render(<SettingsPanel onClose={() => undefined} />);
+    fireEvent.click(await screen.findByRole("button", { name: "课件 / OCR" }));
+    const engine = await screen.findByLabelText("OCR 引擎");
+    await waitFor(() => expect(mockIpc.ocrModel.status).toHaveBeenCalled());
+    expect(within(engine).queryByRole("option", { name: /PaddleOCR/ })).not.toBeInTheDocument();
   });
 
   it("lets users choose DeepSeek Vision OCR and save model, base URL, and API key", async () => {

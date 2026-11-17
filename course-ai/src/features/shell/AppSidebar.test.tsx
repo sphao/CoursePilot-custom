@@ -9,6 +9,13 @@ import { makeNav } from "./testNav";
 
 const { mockIpc } = vi.hoisted(() => ({
   mockIpc: {
+    // 侧边栏底部的 DeepSeek 面板会查余额和本次运行用量；给固定值，别落到真实 IPC。
+    ai: {
+      deepseekBalance: vi.fn().mockResolvedValue({ totalBalance: "0" }),
+    },
+    dev: {
+      llmUsage: vi.fn().mockResolvedValue([]),
+    },
     courses: {
       list: vi.fn(),
       create: vi.fn(),

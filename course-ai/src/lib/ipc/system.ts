@@ -15,6 +15,9 @@ import type {
   UpdateCheck,
   WhisperModel,
   ModelsDir,
+  PaddleOcrStatus,
+  AiUsageRow,
+  AiUsageSummary,
   CloudSyncProbeAccountChangeResult,
   CloudSyncStatus,
   CloudSyncProbeArmResult,
@@ -31,6 +34,10 @@ export const app = {
   networkInfo: (): Promise<{ metered: boolean }> => invoke("plugin:mobile-files|network_info"),
   // 问一次 GitHub 上的最新版本（只取版本号和发布页地址）。
   checkUpdate: (): Promise<UpdateCheck> => invoke("cmd_check_update"),
+  /** 应用内自动更新：有签过名、能直接装的新版本时返回它（只有桌面；手机恒为 null）。 */
+  updaterCheck: (): Promise<{ version: string; current: string } | null> => invoke("cmd_updater_check"),
+  /** 下载、校验、安装并重启。进度见 `updater:progress` 事件。 */
+  updaterInstall: (): Promise<void> => invoke("cmd_updater_install"),
   // 应用私有目录的占用明细（设置 → 存储）。手机上用来解释空间去哪了。
   storageUsage: (): Promise<StorageUsage> => invoke("cmd_storage_usage"),
   // 清掉升级前删除视频留下的、已经没有数据库行引用的媒体副本。
@@ -72,6 +79,12 @@ export const dev = {
   clearLlmUsage: (): Promise<void> => invoke("cmd_clear_llm_usage"),
 };
 
+/** 落库的大模型用量与估算花费（设置 → 大模型 → 用量与花费；视频概览底下那一行）。 */
+export const aiUsage = {
+  summary: (days = 30): Promise<AiUsageSummary> => invoke("cmd_ai_usage_summary", { days }),
+  video: (videoId: string): Promise<AiUsageRow> => invoke("cmd_video_ai_usage", { videoId }),
+};
+
 // 发一条系统桌面通知（学习提醒）。触发时机与去重由前端决定。
 export const notify = (title: string, body: string): Promise<void> =>
   invoke("cmd_notify", { title, body });
@@ -97,6 +110,14 @@ export const whisper = {
   deleteModel: (id: string): Promise<void> => invoke("cmd_delete_asr_model", { id }),
   /** 删掉不再使用的旧模型文件。 */
   deleteLegacyModels: (): Promise<ModelsDir> => invoke("cmd_delete_legacy_models"),
+};
+
+export const ocrModel = {
+  status: (): Promise<PaddleOcrStatus> => invoke("cmd_paddle_ocr_status"),
+  /** 下载（进度见 `ocr-model:download` 事件，字段同语音识别模型的下载事件）。 */
+  download: (): Promise<void> => invoke("cmd_download_paddle_ocr"),
+  /** 删掉模型；设置里正选着 PaddleOCR 时后端会改回本地 OCR。 */
+  remove: (): Promise<void> => invoke("cmd_delete_paddle_ocr"),
 };
 
 export const backup = {

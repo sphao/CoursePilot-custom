@@ -22,6 +22,8 @@ pub mod local_asr;
 pub mod media_kind;
 pub mod model_store;
 pub mod ocr;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod paddle_ocr;
 pub mod playable;
 pub mod quiz;
 pub mod rag;
@@ -45,6 +47,8 @@ use crate::jobs::{self, emit_update, JobEvent};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
+use serde::Serialize;
+use sqlx::FromRow;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +63,8 @@ enum TranscriptCorrectionOutcome {
     Applied,
     NoProvider,
     Failed,
+    /// 本月 AI 花费到了预算，自动纠错跳过。
+    OverBudget,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +85,9 @@ fn asr_done_message(count: usize, outcome: TranscriptCorrectionOutcome) -> Strin
         }
         TranscriptCorrectionOutcome::Failed => {
             format!("{count} segments；AI 纠错失败，已保留原始文稿")
+        }
+        TranscriptCorrectionOutcome::OverBudget => {
+            format!("{count} segments；本月 AI 预算已用完，当前为原始文稿")
         }
     }
 }
@@ -159,8 +168,12 @@ fn select_local_model(models_root: &Path, preferred_id: &str, language: &str) ->
             && model.fits_memory(available_mb))
         .then_some(LocalModel::Sherpa(model))
     };
+    // 选了 1.7B 却还没下载（或放不下）：先退到 0.6B，它和 1.7B 最像（同样有标点、认热词）；
+    // 再按清单顺序找一个能用的。
+    let next_best = (preferred_id == local_asr::QWEN3_ASR_17B.id).then_some(&local_asr::QWEN3_ASR);
     local_asr::find(preferred_id)
         .and_then(usable)
+        .or_else(|| next_best.and_then(usable))
         .or_else(|| local_asr::MODELS.iter().copied().find_map(usable))
 }
 
@@ -219,6 +232,7 @@ async fn run_local_model_now(
         LocalModel::Sherpa(model) if model.kind == local_asr::SherpaKind::Qwen3AsrGguf => {
             let job = llama_asr::LlamaJob {
                 audio: audio.to_path_buf(),
+                model,
                 model_dir: local_asr::model_dir(models_root, model),
                 vad: local_asr::vad_path(models_root),
                 language: Some(language.to_string()),
@@ -641,7 +655,7 @@ async fn run_all(
 
         // 是否对字幕走 AI 纠错：视频级偏好（导入时勾选）> 全局开关，再要求有可用大模型。
         let autocorrect = subtitle::autocorrect_enabled(&db, &video_id).await?;
-        let correct = if autocorrect {
+        let correct = if autocorrect && crate::usage_log::over_budget_message(&db).await.is_none() {
             crate::commands::ai::provider_for_db(&db, crate::llm::profiles::AiTask::Correction)
                 .await?
         } else {
@@ -1030,12 +1044,13 @@ async fn run_all(
             if let Err(error) = asr_cache::clear(&db, &video_id).await {
                 tracing::warn!(%error, "清理分片识别缓存失败");
             }
-            let final_message = match crate::commands::ai::provider_for_db(
-                &db,
-                crate::llm::profiles::AiTask::Correction,
-            )
-            .await?
-            {
+            let over_budget = crate::usage_log::over_budget_message(&db).await.is_some();
+            let provider = if over_budget {
+                None
+            } else {
+                crate::commands::ai::provider_for_db(&db, crate::llm::profiles::AiTask::Correction).await?
+            };
+            let final_message = match provider {
                 Some((provider, model)) => {
                     emit_running_progress(
                         &app,
@@ -1065,6 +1080,7 @@ async fn run_all(
                         }
                     }
                 }
+                None if over_budget => asr_done_message(count, TranscriptCorrectionOutcome::OverBudget),
                 None => asr_done_message(count, TranscriptCorrectionOutcome::NoProvider),
             };
             jobs::update_progress(&db, &asr_job.id, 1.0, Some(&final_message)).await?;
@@ -1704,6 +1720,12 @@ async fn run_ai_followups(
                 continue;
             }
         };
+        // 本月 AI 花费到了预算：自动生成先停下（用户自己点「生成」照常能跑）。
+        if let Some(msg) = crate::usage_log::over_budget_message(db).await {
+            let _ = jobs::cancel(db, &job.id, &msg).await;
+            emit_stage(app, video_id, &job.id, stage, "canceled", 0.0, Some(&msg));
+            continue;
+        }
         if halted_profiles.contains(&resolved.profile_id) {
             // 标成 canceled 而不是 failed：它没失败，是这个 Profile 已经确定不可用，根本没发请求。
             let _ = jobs::cancel(db, &job.id, AI_HALTED_MESSAGE).await;
@@ -2026,6 +2048,44 @@ async fn list_processing_videos_for_queue(
     Ok(videos)
 }
 
+/// 处理队列页下方的「最近完成」：整条流水线都已结束（没有排队、在跑或失败的步骤）的视频，
+/// 按最后一步做完的时间倒序。队列里只剩一两条时页面不至于空着，也方便回到刚处理好的课。
+#[derive(Debug, Serialize, FromRow)]
+pub struct RecentProcessed {
+    #[sqlx(flatten)]
+    #[serde(flatten)]
+    pub video: Video,
+    pub finished_at: i64,
+}
+
+#[tauri::command]
+pub async fn cmd_list_recent_processed_videos(
+    app: AppHandle,
+    limit: Option<i64>,
+) -> AppResult<Vec<RecentProcessed>> {
+    let db = app.state::<AppState>().db.clone();
+    list_recent_processed(&db, limit.unwrap_or(5).clamp(1, 20)).await
+}
+
+async fn list_recent_processed(db: &crate::db::Db, limit: i64) -> AppResult<Vec<RecentProcessed>> {
+    Ok(sqlx::query_as(
+        "SELECT v.*, j.finished_at AS finished_at
+           FROM videos v
+           JOIN (SELECT video_id, MAX(finished_at) AS finished_at
+                   FROM processing_jobs
+                  GROUP BY video_id
+                 HAVING SUM(status IN ('pending', 'running', 'failed')) = 0
+                    AND SUM(status = 'done') > 0
+                    AND MAX(finished_at) IS NOT NULL) j ON j.video_id = v.id
+          WHERE v.deleted_at IS NULL AND v.processed_status = 'done'
+          ORDER BY j.finished_at DESC
+          LIMIT ?",
+    )
+    .bind(limit)
+    .fetch_all(&db.pool)
+    .await?)
+}
+
 /// Hide a failed queue item persistently without deleting the video or its diagnostic jobs.
 #[tauri::command]
 pub async fn cmd_dismiss_processing_video(app: AppHandle, video_id: String) -> AppResult<()> {
@@ -2089,12 +2149,17 @@ pub async fn cmd_process_video(app: AppHandle, video_id: String) -> AppResult<()
     let task_slides_abort = slides_abort.clone();
     let handle = tauri::async_runtime::spawn(async move {
         let _ = start_rx.await;
-        if let Err(error) = run_all(
-            task_app.clone(),
-            task_video.clone(),
-            task_slides_cancel,
-            slides_done_tx,
-            task_slides_abort,
+        // 这次处理里的大模型调用（纠错、章节、摘要…）都记到这个视频上（设置里的「用量与花费」）。
+        let scope = crate::usage_log::UsageScope::video(&task_video);
+        if let Err(error) = crate::usage_log::scoped(
+            scope,
+            run_all(
+                task_app.clone(),
+                task_video.clone(),
+                task_slides_cancel,
+                slides_done_tx,
+                task_slides_abort,
+            ),
         )
         .await
         {
@@ -2494,6 +2559,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recent_processed_lists_only_fully_finished_videos_newest_first() {
+        let dir = tempdir().unwrap();
+        let db = crate::db::Db::connect_and_migrate(&dir.path().join("test.db"))
+            .await
+            .unwrap();
+        let course = create_course(&db, "c".into(), dir.path().to_string_lossy().into())
+            .await
+            .unwrap();
+        let mut ids = Vec::new();
+        for name in ["older", "newer", "still-running", "failed-step"] {
+            let path = dir.path().join(format!("{name}.mp4"));
+            std::fs::write(&path, b"x").unwrap();
+            let video = add_local_video(&db, &course.id, path, None).await.unwrap();
+            sqlx::query("UPDATE videos SET processed_status='done' WHERE id=?")
+                .bind(&video.id)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+            for job in jobs::ensure_jobs(&db, &video.id).await.unwrap() {
+                jobs::finish(&db, &job.id).await.unwrap();
+            }
+            ids.push(video.id);
+        }
+        let set_finished = |id: String, at: i64| {
+            let db = db.clone();
+            async move {
+                sqlx::query("UPDATE processing_jobs SET finished_at=? WHERE video_id=?")
+                    .bind(at)
+                    .bind(id)
+                    .execute(&db.pool)
+                    .await
+                    .unwrap();
+            }
+        };
+        set_finished(ids[0].clone(), 1_000).await;
+        set_finished(ids[1].clone(), 2_000).await;
+        sqlx::query("UPDATE processing_jobs SET status='running' WHERE video_id=? AND stage='quiz'")
+            .bind(&ids[2])
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE processing_jobs SET status='failed' WHERE video_id=? AND stage='notes'")
+            .bind(&ids[3])
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let recent = list_recent_processed(&db, 5).await.unwrap();
+        let got: Vec<&str> = recent.iter().map(|item| item.video.id.as_str()).collect();
+        assert_eq!(got, vec![ids[1].as_str(), ids[0].as_str()]);
+        assert_eq!(recent[0].finished_at, 2_000);
+        assert_eq!(list_recent_processed(&db, 1).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
     async fn dismissing_a_queue_item_whose_video_is_gone_is_idempotent() {
         let dir = tempdir().unwrap();
         let db = crate::db::Db::connect_and_migrate(&dir.path().join("test.db"))
@@ -2531,6 +2651,23 @@ mod tests {
         }
         let vad = local_asr::vad_path(app_data);
         std::fs::File::create(&vad).unwrap().set_len(local_asr::VAD.size).unwrap();
+    }
+
+    #[test]
+    fn choosing_qwen3_asr_1_7b_without_it_falls_back_to_0_6b_before_sensevoice() {
+        let dir = tempdir().unwrap();
+        let app = dir.path();
+        install_sherpa(app, &local_asr::SENSE_VOICE);
+        install_sherpa(app, &local_asr::QWEN3_ASR);
+        // 1.7B 还没下载：退到同类的 0.6B，而不是清单里排第一的 SenseVoice。
+        assert!(matches!(select_local_model(app, "qwen3-asr-1.7b", "zh"), Some(LocalModel::Sherpa(m)) if m.id == "qwen3-asr"));
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            install_sherpa(app, &local_asr::QWEN3_ASR_17B);
+            assert!(matches!(select_local_model(app, "qwen3-asr-1.7b", "zh"), Some(LocalModel::Sherpa(m)) if m.id == "qwen3-asr-1.7b"));
+            // 两个 Qwen 各装各的目录，文件名也不同。
+            assert_ne!(local_asr::model_dir(app, &local_asr::QWEN3_ASR), local_asr::model_dir(app, &local_asr::QWEN3_ASR_17B));
+        }
     }
 
     #[test]

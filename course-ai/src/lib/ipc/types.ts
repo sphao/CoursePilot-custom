@@ -373,3 +373,34 @@ export interface UpdateCheck {
   /** 发布页地址：更新说明和各平台的安装包。 */
   url: string;
 }
+
+/** 课件 OCR 的 PaddleOCR 模型（只在桌面上有）。 */
+export type PaddleOcrStatus = {
+  available: boolean;
+  installed: boolean;
+  downloadSize: number;
+  sizeOnDisk: number;
+};
+
+/** 一组大模型用量（按用途 / 模型 / 课程分组，或某个视频的合计）。花费是按参考价估算的 USD。 */
+export type AiUsageRow = {
+  key: string;
+  name: string | null;
+  calls: number;
+  promptTokens: number;
+  cachedTokens: number;
+  completionTokens: number;
+  costUsd: number;
+  /** 查不到价格、没算进花费的调用次数。 */
+  unpricedCalls: number;
+};
+
+export type AiUsageSummary = {
+  sinceMs: number;
+  total: AiUsageRow;
+  byLabel: AiUsageRow[];
+  byModel: AiUsageRow[];
+  byCourse: AiUsageRow[];
+  monthCostUsd: number;
+  budgetUsd: number | null;
+};

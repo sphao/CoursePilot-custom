@@ -4,10 +4,13 @@ import { describe, expect, it } from "vitest";
 
 /** 按 @import 顺序内联本地样式文件，得到与构建时同序的整份样式表。 */
 function readStylesheet(file: string): string {
-  return readFileSync(file, "utf8").replace(
-    /^@import "(\.[^"]+)";$/gm,
-    (_, relative: string) => readStylesheet(resolve(dirname(file), relative)),
-  );
+  // Windows 上 core.autocrlf 会把工作区里的 CSS 换成 CRLF；断言按行的正则不认 \r。
+  return readFileSync(file, "utf8")
+    .replace(/\r\n/g, "\n")
+    .replace(
+      /^@import "(\.[^"]+)";$/gm,
+      (_, relative: string) => readStylesheet(resolve(dirname(file), relative)),
+    );
 }
 
 const css = readStylesheet(resolve("src/globals.css"));

@@ -47,6 +47,9 @@ export const pipeline = {
   /** 批量处理：对多个视频依次启动完整流水线，返回启动失败的视频列表。 */
   batchProcess: (videoIds: string[]): Promise<string[]> =>
     invoke("cmd_batch_process", { videoIds }),
+  /** 整条流水线都做完的视频，按完成时间倒序（队列页的「最近完成」）。 */
+  recent: (limit = 5): Promise<(Video & { finished_at: number })[]> =>
+    invoke("cmd_list_recent_processed_videos", { limit }),
 };
 
 export const transcripts = {

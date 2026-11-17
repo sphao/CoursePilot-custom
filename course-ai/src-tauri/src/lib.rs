@@ -22,7 +22,7 @@ use crate::commands::ai::{
     cmd_delete_quiz_set, cmd_get_quiz, cmd_get_quiz_course_rules, cmd_get_summary, cmd_grade_quiz_answer, cmd_set_quiz_course_rules, cmd_detect_ollama, cmd_has_api_key, cmd_list_models, cmd_save_llm_profiles, cmd_save_notes,
     cmd_set_api_key, cmd_stale_ai_artifacts, cmd_batch_generate, cmd_deepseek_balance,
 };
-use crate::commands::app::{cmd_check_update, cmd_exit_app};
+use crate::commands::app::{cmd_check_update, cmd_exit_app, cmd_updater_check, cmd_updater_install};
 use crate::commands::assistant::{cmd_assistant_ask, cmd_cancel_assistant};
 use crate::commands::backup::{cmd_backup_database, cmd_restore_database};
 use crate::commands::clips::{cmd_add_clip, cmd_delete_clip, cmd_list_clips, cmd_update_clip};
@@ -93,6 +93,7 @@ use crate::commands::videos::{
 use crate::commands::transcode::{cmd_start_transcode, cmd_transcode_status};
 use crate::commands::whisper::{
     cmd_delete_asr_model, cmd_delete_legacy_models, cmd_download_whisper_model, cmd_get_models_dir,
+    cmd_delete_paddle_ocr, cmd_download_paddle_ocr, cmd_paddle_ocr_status,
     cmd_list_whisper_models, cmd_set_models_dir,
 };
 use crate::db::Db;
@@ -103,10 +104,12 @@ use crate::downloads::{
 };
 use crate::jobs::cmd_list_jobs;
 use crate::pipeline::{
+    cmd_batch_process,
     cmd_cancel_processing, cmd_dismiss_processing_video, cmd_list_processing_videos,
-    cmd_batch_process, cmd_process_video, cmd_recorrect_transcript, ProcessingTasks,
+    cmd_list_recent_processed_videos,
+    cmd_process_video, cmd_recorrect_transcript, ProcessingTasks,
 };
-use crate::usage_log::{cmd_clear_llm_usage, cmd_llm_usage};
+use crate::usage_log::{cmd_ai_usage_summary, cmd_clear_llm_usage, cmd_llm_usage, cmd_video_ai_usage};
 use tauri::Manager;
 
 /// 启动时无法继续：先告诉用户原因再退出。setup 跑在不能 unwind 的回调里，
@@ -140,6 +143,9 @@ pub fn run() {
             let _ = window.set_focus();
         }
     }));
+    // 应用内自动更新（只有桌面）。
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -154,6 +160,7 @@ pub fn run() {
             tauri::async_runtime::block_on(async move {
                 let data_dir = handle.path().app_data_dir().expect("app_data_dir");
                 std::fs::create_dir_all(&data_dir).expect("create app data dir");
+                crate::pipeline::model_store::remember_app_data(&data_dir);
                 let db_path = data_dir.join("courseai.db");
                 match crate::backup::apply_pending_restore(&data_dir, &db_path).await {
                     Ok(true) => tracing::info!("applied pending database restore before opening SQLite"),
@@ -172,6 +179,10 @@ pub fn run() {
                         db_path.display()
                     )),
                 };
+                crate::usage_log::attach_db(db.clone());
+                if let Err(error) = crate::usage_log::prune(&db).await {
+                    tracing::warn!(%error, "清理一年前的大模型用量记录失败");
+                }
                 // iOS 每次更新 / 重装应用，沙盒路径里的 UUID 都会变，库里存的绝对路径要跟着改。
                 #[cfg(target_os = "ios")]
                 if let Some(current_root) =
@@ -266,6 +277,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             cmd_exit_app,
             cmd_check_update,
+            cmd_updater_check,
+            cmd_updater_install,
             cmd_create_course,
             cmd_list_courses,
             cmd_delete_course,
@@ -309,6 +322,8 @@ pub fn run() {
             cmd_get_dev_logs,
             cmd_clear_dev_logs,
             cmd_llm_usage,
+            cmd_ai_usage_summary,
+            cmd_video_ai_usage,
             cmd_clear_llm_usage,
             cmd_list_whisper_models,
             cmd_download_whisper_model,
@@ -316,12 +331,16 @@ pub fn run() {
             cmd_set_models_dir,
             cmd_delete_legacy_models,
             cmd_delete_asr_model,
+            cmd_paddle_ocr_status,
+            cmd_download_paddle_ocr,
+            cmd_delete_paddle_ocr,
             cmd_list_jobs,
             cmd_process_video,
             cmd_batch_process,
             cmd_cancel_processing,
             cmd_dismiss_processing_video,
             cmd_list_processing_videos,
+            cmd_list_recent_processed_videos,
             cmd_recorrect_transcript,
             cmd_list_transcripts,
             cmd_update_transcript,

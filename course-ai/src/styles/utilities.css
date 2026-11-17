@@ -140,11 +140,11 @@
      新加的对话框不会因为忘记加类就退回硬切。手搓的 role="dialog"（如就地改名框）
      没有 data-state，选不中，不受影响。 */
   [role="dialog"][data-state="open"] {
-    animation: ca-dialog-in 0.18s var(--ease, cubic-bezier(0.22, 0.61, 0.36, 1));
+    animation: ca-dialog-in 0.18s var(--ease);
   }
 
   [role="dialog"][data-state="closed"] {
-    animation: ca-dialog-out 0.14s var(--ease, cubic-bezier(0.22, 0.61, 0.36, 1));
+    animation: ca-dialog-out 0.14s var(--ease);
   }
 }
 
@@ -169,11 +169,11 @@
 
 @media (prefers-reduced-motion: no-preference) {
   [role="dialog"][data-presentation="sheet"][data-state="open"] {
-    animation: ca-sheet-in 0.26s cubic-bezier(0.2, 0, 0, 1);
+    animation: ca-sheet-in 0.26s var(--ease-out);
   }
 
   [role="dialog"][data-presentation="sheet"][data-state="closed"] {
-    animation: ca-sheet-out 0.18s cubic-bezier(0.4, 0, 1, 1);
+    animation: ca-sheet-out 0.18s var(--ease-in);
   }
 }
 
@@ -193,7 +193,7 @@
 
 @media (prefers-reduced-motion: no-preference) {
   .ca-card-enter {
-    animation: ca-card-enter 0.16s var(--ease, cubic-bezier(0.22, 0.61, 0.36, 1))
+    animation: ca-card-enter 0.16s var(--ease)
       backwards;
   }
 
@@ -279,6 +279,19 @@
     var(--surface-app);
 }
 
+/* 卡片放在视觉中心（约 40% 高处）而不是几何中线：上下两段留白按 2 : 3 分。
+   居中时题目和评分按钮的重心落在中线偏下，上面空出近一半。屏幕矮、内容长时
+   两段留白都缩到 0，照常滚动。 */
+.ca-review-center::before,
+.ca-review-center::after {
+  content: "";
+  flex: 2 1 0;
+}
+
+.ca-review-center::after {
+  flex-grow: 3;
+}
+
 /* 阅读区：笔记、摘要、复习卡片等「读」的内容用衬线与更松的行距（参考 Apple 图书 / Readwise）。
    界面控件不挂这个类。 */
 .ca-reading {
@@ -347,7 +360,7 @@
   }
 
   .ca-menu.ca-menu-sheet {
-    animation: ca-sheet-in 0.24s cubic-bezier(0.2, 0, 0, 1);
+    animation: ca-sheet-in 0.24s var(--ease-out);
   }
 }
 
@@ -373,7 +386,7 @@
 
 @media (prefers-reduced-motion: no-preference) {
   .ca-task-notice {
-    animation: ca-notice-in 0.2s cubic-bezier(0.2, 0, 0, 1);
+    animation: ca-notice-in var(--dur-spring) var(--ease-spring) backwards;
   }
 }
 
@@ -422,7 +435,8 @@
 
 @media (prefers-reduced-motion: no-preference) {
   .ca-hint-pop {
-    animation: ca-overlay-in 0.14s ease;
+    transform-origin: 50% 0;
+    animation: ca-pop-in var(--dur-spring) var(--ease-spring) backwards;
   }
 }
 
